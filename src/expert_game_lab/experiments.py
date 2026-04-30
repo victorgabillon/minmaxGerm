@@ -93,6 +93,13 @@ def _packet_gaps(state: tuple[int, ...]) -> tuple[int, ...]:
     return tuple(values[index] - values[index + 1] for index in range(len(values) - 1))
 
 
+def _parse_int_tuple(text: str) -> tuple[int, ...]:
+    stripped = text.strip()
+    if not stripped:
+        return ()
+    return tuple(int(piece.strip()) for piece in stripped.split(",") if piece.strip())
+
+
 def _summarize_weighted_group(
     items: list[WeightedGreedyContribution],
     n: int,
@@ -178,6 +185,21 @@ def summarize_weighted_greedy_by_regime(
     return summaries
 
 
+def filter_weighted_greedy_contributions(
+    contributions: list[WeightedGreedyContribution],
+    packet_type_filter: tuple[int, ...] | None = None,
+    packet_gaps_filter: tuple[int, ...] | None = None,
+) -> list[WeightedGreedyContribution]:
+    filtered: list[WeightedGreedyContribution] = []
+    for item in contributions:
+        if packet_type_filter is not None and item.packet_type != packet_type_filter:
+            continue
+        if packet_gaps_filter is not None and _packet_gaps(item.state) != packet_gaps_filter:
+            continue
+        filtered.append(item)
+    return filtered
+
+
 def _policy_registry(k: int) -> dict[str, object]:
     policies: dict[str, object] = {
         "comb": comb_policy,
@@ -186,6 +208,7 @@ def _policy_registry(k: int) -> dict[str, object]:
         "packet_minimal_frontier": packet_minimal_frontier_policy,
     }
     if k == 5:
+        policies["chase5"] = fixed_rank_policy({1, 3})
         policies["packet_regime5"] = packet_regime5_policy
     for size in range(1, k):
         for subset in combinations(range(1, k + 1), size):
@@ -413,6 +436,41 @@ def print_weighted_greedy_by_regime(k: int, T: int, policy_name: str, n: int = 1
         print()
 
 
+def print_weighted_greedy_filter(
+    k: int,
+    T: int,
+    policy_name: str,
+    packet_type_filter: tuple[int, ...] | None,
+    packet_gaps_filter: tuple[int, ...] | None,
+    n: int = 20,
+) -> None:
+    policies = _policy_registry(k)
+    total_weighted_defect, contributions = occupation_weighted_greedy_defects(k, T, policies[policy_name])
+    filtered = filter_weighted_greedy_contributions(
+        contributions,
+        packet_type_filter=packet_type_filter,
+        packet_gaps_filter=packet_gaps_filter,
+    )
+    filtered_total = sum(item.contribution for item in filtered)
+
+    print(f"Filtered occupation-weighted greedy defects for {policy_name}, k={k}, T={T}")
+    print()
+    print(f"packet type filter: {packet_type_filter}")
+    print(f"packet gaps filter: {packet_gaps_filter}")
+    print(f"matching rows: {len(filtered)}")
+    print(f"filtered total contribution: {filtered_total:.6f}")
+    print(f"overall total weighted defect: {total_weighted_defect:.6f}")
+    print()
+    print("time  remaining  state               occupancy    defect    contribution  best    policy support")
+    for item in filtered[:n]:
+        print(
+            f"{item.time:4d} {item.remaining_horizon:10d} {str(item.state):18s}"
+            f" {item.occupancy_probability:10.6f} {item.local_defect:9.6f}"
+            f" {item.contribution:13.6f}  {_format_action(item.best_action):5s}"
+            f"  {_format_policy(item.policy_support)}"
+        )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Finite-horizon expert game experiments")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -457,6 +515,14 @@ def _build_parser() -> argparse.ArgumentParser:
     weighted_greedy_by_regime.add_argument("--policy", required=True)
     weighted_greedy_by_regime.add_argument("-n", type=int, default=10)
 
+    weighted_greedy_filter = subparsers.add_parser("weighted-greedy-filter")
+    weighted_greedy_filter.add_argument("--k", type=int, required=True)
+    weighted_greedy_filter.add_argument("--T", type=int, required=True)
+    weighted_greedy_filter.add_argument("--policy", required=True)
+    weighted_greedy_filter.add_argument("--packet-type", required=True)
+    weighted_greedy_filter.add_argument("--packet-gaps", required=True)
+    weighted_greedy_filter.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -483,6 +549,16 @@ def main() -> None:
         return
     if args.command == "weighted-greedy-by-regime":
         print_weighted_greedy_by_regime(args.k, args.T, args.policy, args.n)
+        return
+    if args.command == "weighted-greedy-filter":
+        print_weighted_greedy_filter(
+            args.k,
+            args.T,
+            args.policy,
+            _parse_int_tuple(args.packet_type),
+            _parse_int_tuple(args.packet_gaps),
+            args.n,
+        )
         return
     raise ValueError(f"unknown command: {args.command}")
 
