@@ -4,6 +4,7 @@ from expert_game_lab.dp_policy import state_occupancy
 from expert_game_lab.experiments import (
     occupation_weighted_greedy_defects,
     summarize_weighted_greedy_by_packet,
+    summarize_weighted_greedy_by_regime,
 )
 from expert_game_lab.policies import comb_policy, packet_minimal_frontier_policy
 
@@ -32,6 +33,16 @@ def test_weighted_greedy_runs_on_tiny_instances(k: int, T: int, policy_fn) -> No
 def test_weighted_greedy_packet_summaries_preserve_totals(k: int, T: int, policy_fn) -> None:
     total_defect, contributions = occupation_weighted_greedy_defects(k, T, policy_fn)
     summaries = summarize_weighted_greedy_by_packet(contributions, n=10)
+
+    assert sum(summary.total_contribution for summary in summaries) == pytest.approx(total_defect)
+    assert sum(summary.occupancy_mass for summary in summaries) == pytest.approx(float(T))
+    assert summaries
+
+
+@pytest.mark.parametrize(("k", "T", "policy_fn"), [(2, 4, comb_policy), (3, 5, packet_minimal_frontier_policy)])
+def test_weighted_greedy_regime_summaries_preserve_totals(k: int, T: int, policy_fn) -> None:
+    total_defect, contributions = occupation_weighted_greedy_defects(k, T, policy_fn)
+    summaries = summarize_weighted_greedy_by_regime(contributions, n=10)
 
     assert sum(summary.total_contribution for summary in summaries) == pytest.approx(total_defect)
     assert sum(summary.occupancy_mass for summary in summaries) == pytest.approx(float(T))

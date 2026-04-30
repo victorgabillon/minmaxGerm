@@ -54,6 +54,17 @@ class PacketWeightedGreedySummary:
     top_policy_supports: tuple[tuple[str, float], ...]
 
 
+@dataclass(frozen=True)
+class RegimeWeightedGreedySummary:
+    packet_type: tuple[int, ...]
+    packet_gaps: tuple[int, ...]
+    total_contribution: float
+    occupancy_mass: float
+    average_local_defect: float
+    top_best_actions: tuple[tuple[str, float], ...]
+    top_policy_supports: tuple[tuple[str, float], ...]
+
+
 def _format_action(action: tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in action)
 
@@ -69,6 +80,43 @@ def _format_policy(policy: tuple[tuple[float, tuple[int, ...]], ...], max_items:
     return ", ".join(visible[:max_items]) + ", ..."
 
 
+def _packet_values(state: tuple[int, ...]) -> tuple[int, ...]:
+    values: list[int] = []
+    for value in state:
+        if not values or value != values[-1]:
+            values.append(value)
+    return tuple(values)
+
+
+def _packet_gaps(state: tuple[int, ...]) -> tuple[int, ...]:
+    values = _packet_values(state)
+    return tuple(values[index] - values[index + 1] for index in range(len(values) - 1))
+
+
+def _summarize_weighted_group(
+    items: list[WeightedGreedyContribution],
+    n: int,
+) -> tuple[float, float, tuple[tuple[str, float], ...], tuple[tuple[str, float], ...]]:
+    total_contribution = sum(item.contribution for item in items)
+    occupancy_mass = sum(item.occupancy_probability for item in items)
+    weighted_defect_sum = sum(item.occupancy_probability * item.local_defect for item in items)
+    average_local_defect = weighted_defect_sum / occupancy_mass if occupancy_mass > 0 else 0.0
+
+    best_action_totals: dict[str, float] = defaultdict(float)
+    policy_support_totals: dict[str, float] = defaultdict(float)
+    for item in items:
+        best_action_totals[_format_action(item.best_action)] += item.contribution
+        policy_support_totals[_format_policy(item.policy_support)] += item.contribution
+
+    top_best_actions = tuple(
+        sorted(best_action_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]
+    )
+    top_policy_supports = tuple(
+        sorted(policy_support_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]
+    )
+    return total_contribution, average_local_defect, top_best_actions, top_policy_supports
+
+
 def summarize_weighted_greedy_by_packet(
     contributions: list[WeightedGreedyContribution],
     n: int = 10,
@@ -79,26 +127,45 @@ def summarize_weighted_greedy_by_packet(
 
     summaries: list[PacketWeightedGreedySummary] = []
     for ptype, items in grouped.items():
-        total_contribution = sum(item.contribution for item in items)
         occupancy_mass = sum(item.occupancy_probability for item in items)
-        weighted_defect_sum = sum(item.occupancy_probability * item.local_defect for item in items)
-        average_local_defect = weighted_defect_sum / occupancy_mass if occupancy_mass > 0 else 0.0
-
-        best_action_totals: dict[str, float] = defaultdict(float)
-        policy_support_totals: dict[str, float] = defaultdict(float)
-        for item in items:
-            best_action_totals[_format_action(item.best_action)] += item.contribution
-            policy_support_totals[_format_policy(item.policy_support)] += item.contribution
-
-        top_best_actions = tuple(
-            sorted(best_action_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]
-        )
-        top_policy_supports = tuple(
-            sorted(policy_support_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]
+        total_contribution, average_local_defect, top_best_actions, top_policy_supports = _summarize_weighted_group(
+            items,
+            n,
         )
         summaries.append(
             PacketWeightedGreedySummary(
                 packet_type=ptype,
+                total_contribution=total_contribution,
+                occupancy_mass=occupancy_mass,
+                average_local_defect=average_local_defect,
+                top_best_actions=top_best_actions,
+                top_policy_supports=top_policy_supports,
+            )
+        )
+
+    summaries.sort(key=lambda item: item.total_contribution, reverse=True)
+    return summaries
+
+
+def summarize_weighted_greedy_by_regime(
+    contributions: list[WeightedGreedyContribution],
+    n: int = 10,
+) -> list[RegimeWeightedGreedySummary]:
+    grouped: dict[tuple[tuple[int, ...], tuple[int, ...]], list[WeightedGreedyContribution]] = defaultdict(list)
+    for item in contributions:
+        grouped[(item.packet_type, _packet_gaps(item.state))].append(item)
+
+    summaries: list[RegimeWeightedGreedySummary] = []
+    for (ptype, gaps), items in grouped.items():
+        occupancy_mass = sum(item.occupancy_probability for item in items)
+        total_contribution, average_local_defect, top_best_actions, top_policy_supports = _summarize_weighted_group(
+            items,
+            n,
+        )
+        summaries.append(
+            RegimeWeightedGreedySummary(
+                packet_type=ptype,
+                packet_gaps=gaps,
                 total_contribution=total_contribution,
                 occupancy_mass=occupancy_mass,
                 average_local_defect=average_local_defect,
@@ -318,6 +385,34 @@ def print_weighted_greedy_by_packet(k: int, T: int, policy_name: str, n: int = 1
         print()
 
 
+def print_weighted_greedy_by_regime(k: int, T: int, policy_name: str, n: int = 10) -> None:
+    policies = _policy_registry(k)
+    total_weighted_defect, contributions = occupation_weighted_greedy_defects(k, T, policies[policy_name])
+    normalized_total = total_weighted_defect / (T ** 0.5 if T > 0 else 1.0)
+    summaries = summarize_weighted_greedy_by_regime(contributions, n=n)
+
+    print(f"Occupation-weighted greedy defects by regime for {policy_name}, k={k}, T={T}")
+    print()
+    print(f"total weighted defect: {total_weighted_defect:.6f}")
+    print(f"total weighted defect / sqrt(T): {normalized_total:.6f}")
+    print()
+    for summary in summaries:
+        normalized_contribution = summary.total_contribution / (T ** 0.5 if T > 0 else 1.0)
+        print(f"packet type: {summary.packet_type}")
+        print(f"packet gaps: {summary.packet_gaps}")
+        print(f"  total contribution: {summary.total_contribution:.6f}")
+        print(f"  total contribution / sqrt(T): {normalized_contribution:.6f}")
+        print(f"  occupancy mass: {summary.occupancy_mass:.6f}")
+        print(f"  avg local defect (occupancy-weighted): {summary.average_local_defect:.6f}")
+        print("  top best actions by contribution:")
+        for action, contribution in summary.top_best_actions:
+            print(f"    {action}: {contribution:.6f}")
+        print("  top policy supports by contribution:")
+        for support, contribution in summary.top_policy_supports:
+            print(f"    {support}: {contribution:.6f}")
+        print()
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Finite-horizon expert game experiments")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -356,6 +451,12 @@ def _build_parser() -> argparse.ArgumentParser:
     weighted_greedy_by_packet.add_argument("--policy", required=True)
     weighted_greedy_by_packet.add_argument("-n", type=int, default=10)
 
+    weighted_greedy_by_regime = subparsers.add_parser("weighted-greedy-by-regime")
+    weighted_greedy_by_regime.add_argument("--k", type=int, required=True)
+    weighted_greedy_by_regime.add_argument("--T", type=int, required=True)
+    weighted_greedy_by_regime.add_argument("--policy", required=True)
+    weighted_greedy_by_regime.add_argument("-n", type=int, default=10)
+
     return parser
 
 
@@ -379,6 +480,9 @@ def main() -> None:
         return
     if args.command == "weighted-greedy-by-packet":
         print_weighted_greedy_by_packet(args.k, args.T, args.policy, args.n)
+        return
+    if args.command == "weighted-greedy-by-regime":
+        print_weighted_greedy_by_regime(args.k, args.T, args.policy, args.n)
         return
     raise ValueError(f"unknown command: {args.command}")
 
