@@ -20,6 +20,15 @@ class MixedCommutationSolution:
     message: str
 
 
+def _continuation_value(
+    x: tuple[int, ...],
+    action: tuple[int, ...],
+    values_or_fn,
+) -> float:
+    raw_next = tuple(x[index] + action[index] for index in range(len(x)))
+    return float(min(raw_next, default=0)) + _lookup(values_or_fn, canon(raw_next))
+
+
 def _lookup(values_or_fn, state: tuple[int, ...]) -> float:
     if isinstance(values_or_fn, Mapping):
         return float(values_or_fn[state])
@@ -53,10 +62,7 @@ def greedy_defect(
 ) -> float:
     action_list = actions if actions is not None else all_actions(k)
     q_by_action = {
-        action: _lookup(
-            V_prev_policy,
-            canon(tuple(x[index] + action[index] for index in range(k))),
-        )
+        action: _continuation_value(x, action, V_prev_policy)
         for action in action_list
     }
     solution = solve_minimax_step(q_by_action, k)

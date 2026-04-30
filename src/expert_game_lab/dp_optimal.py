@@ -5,6 +5,15 @@ from .lp_game import solve_minimax_step
 from .state import all_states, canon
 
 
+def _next_state_value(
+    state: tuple[int, ...],
+    action: tuple[int, ...],
+    continuation: dict[tuple[int, ...], float],
+) -> float:
+    raw_next = tuple(state[index] + action[index] for index in range(len(state)))
+    return float(min(raw_next, default=0)) + continuation[canon(raw_next)]
+
+
 def optimal_values(
     k: int,
     T: int,
@@ -26,7 +35,7 @@ def optimal_values(
         domain = state_layers[T - horizon]
         for state in domain:
             q_by_action = {
-                action: prev[canon(tuple(state[index] + action[index] for index in range(k)))]
+                action: _next_state_value(state, action, prev)
                 for action in action_list
             }
             solution = solve_minimax_step(q_by_action, k)

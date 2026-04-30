@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from itertools import combinations
 
 from .actions import all_actions, comb_action, fixed_rank_action
 from .defects import commutation_defect, commutation_defect_mixed, greedy_defect
 from .dp_optimal import optimal_values
-from .dp_policy import evaluate_balanced_policy
+from .dp_policy import evaluate_balanced_policy, state_occupancy
 from .lp_game import solve_minimax_step
 from .policies import (
     comb_policy,
@@ -15,6 +16,26 @@ from .policies import (
     packet_minimal_frontier_policy,
 )
 from .state import all_states, canon, packet_type
+
+
+def _next_state_value(
+    state: tuple[int, ...],
+    action: tuple[int, ...],
+    continuation: dict[tuple[int, ...], float],
+) -> float:
+    raw_next = tuple(state[index] + action[index] for index in range(len(state)))
+    return float(min(raw_next, default=0)) + continuation[canon(raw_next)]
+
+
+@dataclass(frozen=True)
+class WeightedGreedyContribution:
+    time: int
+    remaining_horizon: int
+    state: tuple[int, ...]
+    packet_type: tuple[int, ...]
+    occupancy_probability: float
+    local_defect: float
+    contribution: float
 
 
 def _policy_registry(k: int) -> dict[str, object]:
@@ -37,13 +58,17 @@ def compare_values(k: int, T: int) -> None:
     optimal = optimal_values(k, T)
     optimal_zero = optimal[T][zero]
     print(f"Exact minimax value at zero: {optimal_zero:.6f}")
-    print("policy                value        gap      gap/sqrt(T)")
+    print("policy                V_star     V_policy        gap    gap/sqrt(T)   V_policy/sqrt(T)")
     for name, policy_fn in sorted(_policy_registry(k).items()):
         values = evaluate_balanced_policy(k, T, policy_fn)
         policy_zero = values[T][zero]
         gap = optimal_zero - policy_zero
         normalized_gap = gap / (T ** 0.5 if T > 0 else 1.0)
-        print(f"{name:20s} {policy_zero:10.6f} {gap:10.6f} {normalized_gap:12.6f}")
+        normalized_policy = policy_zero / (T ** 0.5 if T > 0 else 1.0)
+        print(
+            f"{name:20s} {optimal_zero:10.6f} {policy_zero:12.6f} {gap:10.6f}"
+            f" {normalized_gap:12.6f} {normalized_policy:16.6f}"
+        )
 
 
 def print_top_greedy_defects(k: int, T: int, policy_name: str, n: int = 20) -> None:
@@ -59,7 +84,7 @@ def print_top_greedy_defects(k: int, T: int, policy_name: str, n: int = 20) -> N
         prev = policy_values[remaining - 1]
         defect = greedy_defect(k, state, prev, policy_fn, actions=action_list)
         q_by_action = {
-            action: prev[canon(tuple(state[index] + action[index] for index in range(k)))]
+            action: _next_state_value(state, action, prev)
             for action in action_list
         }
         solution = solve_minimax_step(q_by_action, k)
@@ -123,6 +148,52 @@ def print_top_mixed_commutation_defects(k: int, T: int, policy_name: str, n: int
         print(f"{str(state):18s} {first_bits:8s} {defect:10.6f}   {mixture}")
 
 
+def occupation_weighted_greedy_defects(k: int, T: int, policy_fn) -> tuple[float, list[WeightedGreedyContribution]]:
+    occupancy = state_occupancy(k, T, policy_fn)
+    policy_values = evaluate_balanced_policy(k, T, policy_fn)
+    contributions: list[WeightedGreedyContribution] = []
+
+    for time in range(T):
+        remaining_horizon = T - time
+        continuation = policy_values[remaining_horizon - 1]
+        for state, occupancy_probability in occupancy[time].items():
+            local_defect = greedy_defect(k, state, continuation, policy_fn)
+            contributions.append(
+                WeightedGreedyContribution(
+                    time=time,
+                    remaining_horizon=remaining_horizon,
+                    state=state,
+                    packet_type=packet_type(state),
+                    occupancy_probability=occupancy_probability,
+                    local_defect=local_defect,
+                    contribution=occupancy_probability * local_defect,
+                )
+            )
+
+    total_weighted_defect = sum(item.contribution for item in contributions)
+    contributions.sort(key=lambda item: item.contribution, reverse=True)
+    return total_weighted_defect, contributions
+
+
+def print_occupation_weighted_greedy_defects(k: int, T: int, policy_name: str, n: int = 20) -> None:
+    policies = _policy_registry(k)
+    total_weighted_defect, contributions = occupation_weighted_greedy_defects(k, T, policies[policy_name])
+    normalized_total = total_weighted_defect / (T ** 0.5 if T > 0 else 1.0)
+
+    print(f"Occupation-weighted greedy defects for {policy_name}, k={k}, T={T}")
+    print()
+    print(f"total weighted defect: {total_weighted_defect:.6f}")
+    print(f"total weighted defect / sqrt(T): {normalized_total:.6f}")
+    print()
+    print("time  remaining  state               packet type      occupancy    defect    contribution")
+    for item in contributions[:n]:
+        print(
+            f"{item.time:4d} {item.remaining_horizon:10d} {str(item.state):18s}"
+            f" {str(item.packet_type):14s} {item.occupancy_probability:10.6f}"
+            f" {item.local_defect:9.6f} {item.contribution:13.6f}"
+        )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Finite-horizon expert game experiments")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -149,6 +220,12 @@ def _build_parser() -> argparse.ArgumentParser:
     commute_mixed.add_argument("--policy", required=True)
     commute_mixed.add_argument("-n", type=int, default=20)
 
+    weighted_greedy = subparsers.add_parser("weighted-greedy")
+    weighted_greedy.add_argument("--k", type=int, required=True)
+    weighted_greedy.add_argument("--T", type=int, required=True)
+    weighted_greedy.add_argument("--policy", required=True)
+    weighted_greedy.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -166,6 +243,9 @@ def main() -> None:
         return
     if args.command == "commute-mixed":
         print_top_mixed_commutation_defects(args.k, args.T, args.policy, args.n)
+        return
+    if args.command == "weighted-greedy":
+        print_occupation_weighted_greedy_defects(args.k, args.T, args.policy, args.n)
         return
     raise ValueError(f"unknown command: {args.command}")
 
