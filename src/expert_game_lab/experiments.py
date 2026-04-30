@@ -16,6 +16,7 @@ from .policies import (
     packet_balanced_partition_policy,
     packet_frontier_policy,
     packet_minimal_frontier_policy,
+    packet_regime5_policy,
 )
 from .state import all_states, canon, packet_type
 
@@ -117,6 +118,8 @@ def _policy_registry(k: int) -> dict[str, object]:
         "packet_frontier": packet_frontier_policy,
         "packet_minimal_frontier": packet_minimal_frontier_policy,
     }
+    if k == 5:
+        policies["packet_regime5"] = packet_regime5_policy
     for size in range(1, k):
         for subset in combinations(range(1, k + 1), size):
             if 1 not in subset:

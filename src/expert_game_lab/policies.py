@@ -121,3 +121,53 @@ def packet_balanced_partition_policy(x: tuple[int, ...]) -> Policy:
         action for action in minimally_splitting if selected_score_sum(action) == min_selected_sum
     ]
     return _balanced_from_base([(1.0, action) for action in chosen_actions])
+
+
+def packet_regime5_policy(x: tuple[int, ...]) -> Policy:
+    state = canon(x)
+    if not state:
+        return [(1.0, ())]
+
+    if len(state) != 5:
+        return packet_minimal_frontier_policy(state)
+
+    state_packets = packets(state)
+    packet_sizes = tuple(len(packet) for packet in state_packets)
+
+    def actions_with_size_two(indices: tuple[int, ...]) -> list[tuple[int, ...]]:
+        base_actions: list[tuple[int, ...]] = []
+        for chosen in combinations(indices, 2):
+            action = [0] * len(state)
+            for index in chosen:
+                action[index] = 1
+            base_actions.append(tuple(action))
+        return base_actions
+
+    if packet_sizes == (5,):
+        base_actions = actions_with_size_two(tuple(range(len(state))))
+        return _balanced_from_base([(1.0, action) for action in base_actions])
+
+    if packet_sizes == (1, 4):
+        base_actions = actions_with_size_two(tuple(state_packets[1]))
+        return _balanced_from_base([(1.0, action) for action in base_actions])
+
+    if packet_sizes == (4, 1):
+        tail_index = state_packets[1][0]
+        base_actions = []
+        for top_index in state_packets[0]:
+            action = [0] * len(state)
+            action[top_index] = 1
+            action[tail_index] = 1
+            base_actions.append(tuple(action))
+        return _balanced_from_base([(1.0, action) for action in base_actions])
+
+    if packet_sizes in {(3, 2), (2, 3)}:
+        size_three_packet = next(packet for packet in state_packets if len(packet) == 3)
+        base_actions = []
+        for index in size_three_packet:
+            action = [0] * len(state)
+            action[index] = 1
+            base_actions.append(tuple(action))
+        return _balanced_from_base([(1.0, action) for action in base_actions])
+
+    return packet_minimal_frontier_policy(state)

@@ -9,6 +9,7 @@ from .policies import (
     packet_balanced_partition_policy,
     packet_frontier_policy,
     packet_minimal_frontier_policy,
+    packet_regime5_policy,
 )
 from .state import all_states, canon, packets
 
@@ -32,6 +33,7 @@ __all__ = [
     "packet_balanced_partition_policy",
     "packet_frontier_policy",
     "packet_minimal_frontier_policy",
+    "packet_regime5_policy",
     "packets",
     "solve_minimax_step",
     "state_occupancy",
