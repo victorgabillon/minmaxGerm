@@ -2,10 +2,22 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping
+from dataclasses import dataclass
+
+import numpy as np
+from scipy.optimize import linprog
 
 from .actions import all_actions
 from .lp_game import solve_minimax_step
 from .state import canon
+
+
+@dataclass(frozen=True)
+class MixedCommutationSolution:
+    best_tv: float
+    weights_by_action: dict[tuple[int, ...], float]
+    success: bool
+    message: str
 
 
 def _lookup(values_or_fn, state: tuple[int, ...]) -> float:
@@ -83,3 +95,77 @@ def commutation_defect(
             best_tv = tv
             best_action = delayed_action
     return best_tv, best_action
+
+
+def commutation_defect_mixed(
+    k: int,
+    x: tuple[int, ...],
+    first_action: tuple[int, ...],
+    policy_fn,
+) -> MixedCommutationSolution:
+    actions = all_actions(k)
+    first_state = canon(tuple(x[index] + first_action[index] for index in range(k)))
+    target = _distribution_after_policy(first_state, policy_fn)
+    delayed_distributions = {
+        action: _distribution_after_policy(x, policy_fn, action)
+        for action in actions
+    }
+
+    support = sorted(
+        set(target).union(*(distribution.keys() for distribution in delayed_distributions.values()))
+    )
+    state_index = {state: index for index, state in enumerate(support)}
+    action_count = len(actions)
+    residual_count = len(support)
+    variable_count = action_count + residual_count
+
+    objective = np.zeros(variable_count)
+    objective[action_count:] = 0.5
+
+    a_ub = np.zeros((2 * residual_count, variable_count))
+    b_ub = np.zeros(2 * residual_count)
+    for row, state in enumerate(support):
+        for action_index, action in enumerate(actions):
+            probability = delayed_distributions[action].get(state, 0.0)
+            a_ub[2 * row, action_index] = -probability
+            a_ub[2 * row + 1, action_index] = probability
+        residual_index = action_count + state_index[state]
+        a_ub[2 * row, residual_index] = -1.0
+        a_ub[2 * row + 1, residual_index] = -1.0
+        target_probability = target.get(state, 0.0)
+        b_ub[2 * row] = -target_probability
+        b_ub[2 * row + 1] = target_probability
+
+    a_eq = np.zeros((1, variable_count))
+    a_eq[0, :action_count] = 1.0
+    b_eq = np.array([1.0])
+    bounds = [(0.0, None)] * variable_count
+
+    result = linprog(
+        c=objective,
+        A_ub=a_ub,
+        b_ub=b_ub,
+        A_eq=a_eq,
+        b_eq=b_eq,
+        bounds=bounds,
+        method="highs",
+    )
+    if not result.success:
+        return MixedCommutationSolution(
+            best_tv=float("nan"),
+            weights_by_action={},
+            success=False,
+            message=result.message,
+        )
+
+    weights = {
+        action: float(result.x[index])
+        for index, action in enumerate(actions)
+        if result.x[index] > 1e-9
+    }
+    return MixedCommutationSolution(
+        best_tv=float(result.fun),
+        weights_by_action=weights,
+        success=True,
+        message=result.message,
+    )

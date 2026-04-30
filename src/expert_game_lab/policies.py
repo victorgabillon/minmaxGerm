@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from itertools import combinations
 
 from .actions import comb_action, complement, fixed_rank_action
 from .state import canon, packets
@@ -56,9 +55,32 @@ def packet_frontier_policy(x: tuple[int, ...]) -> Policy:
 
     split_size = len(top_packet) // 2
     base_actions: list[tuple[float, tuple[int, ...]]] = []
+    from itertools import combinations
+
     for chosen in combinations(top_packet, split_size):
         action = [0] * k
         for index in chosen:
             action[index] = 1
+        base_actions.append((1.0, tuple(action)))
+    return _balanced_from_base(base_actions)
+
+
+def packet_minimal_frontier_policy(x: tuple[int, ...]) -> Policy:
+    state = canon(x)
+    if not state:
+        return [(1.0, ())]
+
+    top_packet = packets(state)[0]
+    k = len(state)
+
+    if len(top_packet) == 1:
+        action = [0] * k
+        action[top_packet[0]] = 1
+        return _balanced_from_base([(1.0, tuple(action))])
+
+    base_actions: list[tuple[float, tuple[int, ...]]] = []
+    for index in top_packet:
+        action = [0] * k
+        action[index] = 1
         base_actions.append((1.0, tuple(action)))
     return _balanced_from_base(base_actions)

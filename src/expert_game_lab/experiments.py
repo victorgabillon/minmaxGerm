@@ -4,11 +4,16 @@ import argparse
 from itertools import combinations
 
 from .actions import all_actions, comb_action, fixed_rank_action
-from .defects import commutation_defect, greedy_defect
+from .defects import commutation_defect, commutation_defect_mixed, greedy_defect
 from .dp_optimal import optimal_values
 from .dp_policy import evaluate_balanced_policy
 from .lp_game import solve_minimax_step
-from .policies import comb_policy, fixed_rank_policy, packet_frontier_policy
+from .policies import (
+    comb_policy,
+    fixed_rank_policy,
+    packet_frontier_policy,
+    packet_minimal_frontier_policy,
+)
 from .state import all_states, canon, packet_type
 
 
@@ -16,6 +21,7 @@ def _policy_registry(k: int) -> dict[str, object]:
     policies: dict[str, object] = {
         "comb": comb_policy,
         "packet_frontier": packet_frontier_policy,
+        "packet_minimal_frontier": packet_minimal_frontier_policy,
     }
     for size in range(1, k):
         for subset in combinations(range(1, k + 1), size):
@@ -91,6 +97,32 @@ def print_top_commutation_defects(k: int, T: int, policy_name: str, n: int = 20)
         print(f"{str(state):18s} {first_bits:8s} {defect:10.6f}   {delayed_bits}")
 
 
+def print_top_mixed_commutation_defects(k: int, T: int, policy_name: str, n: int = 20) -> None:
+    policies = _policy_registry(k)
+    policy_fn = policies[policy_name]
+    rows = []
+    for state in all_states(k, max(T - 2, 0)):
+        for action in all_actions(k, include_trivial=False):
+            solution = commutation_defect_mixed(k, state, action, policy_fn)
+            if not solution.success:
+                raise RuntimeError(
+                    f"Mixed commutation LP failed at state {state}, action {action}: {solution.message}"
+                )
+            rows.append((solution.best_tv, state, action, solution.weights_by_action))
+
+    rows.sort(reverse=True)
+    print(f"Top mixed commutation defects for {policy_name}, k={k}, T={T}")
+    print()
+    print("state               first      defect      best delayed mix")
+    for defect, state, action, weights in rows[:n]:
+        first_bits = "".join(str(bit) for bit in action)
+        mixture = ", ".join(
+            f"{''.join(str(bit) for bit in delayed_action)}:{weight:.3f}"
+            for delayed_action, weight in sorted(weights.items())
+        )
+        print(f"{str(state):18s} {first_bits:8s} {defect:10.6f}   {mixture}")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Finite-horizon expert game experiments")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -111,6 +143,12 @@ def _build_parser() -> argparse.ArgumentParser:
     commute.add_argument("--policy", required=True)
     commute.add_argument("-n", type=int, default=20)
 
+    commute_mixed = subparsers.add_parser("commute-mixed")
+    commute_mixed.add_argument("--k", type=int, required=True)
+    commute_mixed.add_argument("--T", type=int, required=True)
+    commute_mixed.add_argument("--policy", required=True)
+    commute_mixed.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -125,6 +163,9 @@ def main() -> None:
         return
     if args.command == "commute":
         print_top_commutation_defects(args.k, args.T, args.policy, args.n)
+        return
+    if args.command == "commute-mixed":
+        print_top_mixed_commutation_defects(args.k, args.T, args.policy, args.n)
         return
     raise ValueError(f"unknown command: {args.command}")
 
