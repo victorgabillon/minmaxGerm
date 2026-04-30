@@ -36,6 +36,24 @@ class WeightedGreedyContribution:
     occupancy_probability: float
     local_defect: float
     contribution: float
+    best_action: tuple[int, ...]
+    best_action_value: float
+    policy_support: tuple[tuple[float, tuple[int, ...]], ...]
+
+
+def _format_action(action: tuple[int, ...]) -> str:
+    return "".join(str(bit) for bit in action)
+
+
+def _format_policy(policy: tuple[tuple[float, tuple[int, ...]], ...], max_items: int = 8) -> str:
+    visible = [
+        f"{_format_action(action)}:{probability:.3f}"
+        for probability, action in policy
+        if probability >= 1e-6
+    ]
+    if len(visible) <= max_items:
+        return ", ".join(visible)
+    return ", ".join(visible[:max_items]) + ", ..."
 
 
 def _policy_registry(k: int) -> dict[str, object]:
@@ -152,12 +170,28 @@ def occupation_weighted_greedy_defects(k: int, T: int, policy_fn) -> tuple[float
     occupancy = state_occupancy(k, T, policy_fn)
     policy_values = evaluate_balanced_policy(k, T, policy_fn)
     contributions: list[WeightedGreedyContribution] = []
+    action_list = all_actions(k)
 
     for time in range(T):
         remaining_horizon = T - time
         continuation = policy_values[remaining_horizon - 1]
         for state, occupancy_probability in occupancy[time].items():
+            q_by_action = {
+                action: _next_state_value(state, action, continuation)
+                for action in action_list
+            }
+            solution = solve_minimax_step(q_by_action, k)
+            if not solution.success:
+                raise RuntimeError(f"LP failed at state {state}: {solution.message}")
+            best_action = max(
+                action_list,
+                key=lambda action: q_by_action[action] - sum(solution.p[index] * action[index] for index in range(k)),
+            )
+            best_action_value = q_by_action[best_action] - sum(
+                solution.p[index] * best_action[index] for index in range(k)
+            )
             local_defect = greedy_defect(k, state, continuation, policy_fn)
+            policy_support = tuple(policy_fn(state))
             contributions.append(
                 WeightedGreedyContribution(
                     time=time,
@@ -167,6 +201,9 @@ def occupation_weighted_greedy_defects(k: int, T: int, policy_fn) -> tuple[float
                     occupancy_probability=occupancy_probability,
                     local_defect=local_defect,
                     contribution=occupancy_probability * local_defect,
+                    best_action=best_action,
+                    best_action_value=best_action_value,
+                    policy_support=policy_support,
                 )
             )
 
@@ -185,12 +222,14 @@ def print_occupation_weighted_greedy_defects(k: int, T: int, policy_name: str, n
     print(f"total weighted defect: {total_weighted_defect:.6f}")
     print(f"total weighted defect / sqrt(T): {normalized_total:.6f}")
     print()
-    print("time  remaining  state               packet type      occupancy    defect    contribution")
+    print("time  remaining  state               packet type      occupancy    defect    contribution  best    value     policy support")
     for item in contributions[:n]:
         print(
             f"{item.time:4d} {item.remaining_horizon:10d} {str(item.state):18s}"
             f" {str(item.packet_type):14s} {item.occupancy_probability:10.6f}"
             f" {item.local_defect:9.6f} {item.contribution:13.6f}"
+            f"  {_format_action(item.best_action):5s}  {item.best_action_value:8.6f}"
+            f"  {_format_policy(item.policy_support)}"
         )
 
 
