@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from itertools import combinations
 
 from .actions import comb_action, complement, fixed_rank_action
 from .state import canon, packets
@@ -55,8 +56,6 @@ def packet_frontier_policy(x: tuple[int, ...]) -> Policy:
 
     split_size = len(top_packet) // 2
     base_actions: list[tuple[float, tuple[int, ...]]] = []
-    from itertools import combinations
-
     for chosen in combinations(top_packet, split_size):
         action = [0] * k
         for index in chosen:
@@ -84,3 +83,41 @@ def packet_minimal_frontier_policy(x: tuple[int, ...]) -> Policy:
         action[index] = 1
         base_actions.append((1.0, tuple(action)))
     return _balanced_from_base(base_actions)
+
+
+def packet_balanced_partition_policy(x: tuple[int, ...]) -> Policy:
+    state = canon(x)
+    if not state:
+        return [(1.0, ())]
+
+    k = len(state)
+    target = k // 2
+    state_packets = packets(state)
+    candidate_actions: list[tuple[int, ...]] = []
+    for chosen in combinations(range(k), target):
+        action = [0] * k
+        for index in chosen:
+            action[index] = 1
+        candidate_actions.append(tuple(action))
+
+    def split_count(action: tuple[int, ...]) -> int:
+        count = 0
+        for packet in state_packets:
+            bits = {action[index] for index in packet}
+            if len(bits) > 1:
+                count += 1
+        return count
+
+    min_split_count = min(split_count(action) for action in candidate_actions)
+    minimally_splitting = [
+        action for action in candidate_actions if split_count(action) == min_split_count
+    ]
+
+    def selected_score_sum(action: tuple[int, ...]) -> int:
+        return sum(state[index] for index in range(k) if action[index] == 1)
+
+    min_selected_sum = min(selected_score_sum(action) for action in minimally_splitting)
+    chosen_actions = [
+        action for action in minimally_splitting if selected_score_sum(action) == min_selected_sum
+    ]
+    return _balanced_from_base([(1.0, action) for action in chosen_actions])

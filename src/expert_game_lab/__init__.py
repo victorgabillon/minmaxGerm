@@ -3,7 +3,13 @@ from .defects import MixedCommutationSolution, commutation_defect, commutation_d
 from .dp_optimal import optimal_values
 from .dp_policy import evaluate_balanced_policy, expected_action, state_occupancy
 from .lp_game import StepSolution, solve_minimax_step
-from .policies import comb_policy, fixed_rank_policy, packet_frontier_policy, packet_minimal_frontier_policy
+from .policies import (
+    comb_policy,
+    fixed_rank_policy,
+    packet_balanced_partition_policy,
+    packet_frontier_policy,
+    packet_minimal_frontier_policy,
+)
 from .state import all_states, canon, packets
 
 __all__ = [
@@ -23,6 +29,7 @@ __all__ = [
     "fixed_rank_policy",
     "greedy_defect",
     "optimal_values",
+    "packet_balanced_partition_policy",
     "packet_frontier_policy",
     "packet_minimal_frontier_policy",
     "packets",

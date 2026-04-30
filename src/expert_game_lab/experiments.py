@@ -12,6 +12,7 @@ from .lp_game import solve_minimax_step
 from .policies import (
     comb_policy,
     fixed_rank_policy,
+    packet_balanced_partition_policy,
     packet_frontier_policy,
     packet_minimal_frontier_policy,
 )
@@ -59,6 +60,7 @@ def _format_policy(policy: tuple[tuple[float, tuple[int, ...]], ...], max_items:
 def _policy_registry(k: int) -> dict[str, object]:
     policies: dict[str, object] = {
         "comb": comb_policy,
+        "packet_balanced_partition": packet_balanced_partition_policy,
         "packet_frontier": packet_frontier_policy,
         "packet_minimal_frontier": packet_minimal_frontier_policy,
     }
