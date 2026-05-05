@@ -42,8 +42,10 @@ class WeightedGreedyContribution:
     local_defect: float
     contribution: float
     best_action: tuple[int, ...]
+    best_edge_signature: tuple[int, ...]
     best_action_value: float
     policy_support: tuple[tuple[float, tuple[int, ...]], ...]
+    policy_edge_signatures: tuple[tuple[float, tuple[int, ...]], ...]
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,8 @@ class PacketWeightedGreedySummary:
     average_local_defect: float
     top_best_actions: tuple[tuple[str, float], ...]
     top_policy_supports: tuple[tuple[str, float], ...]
+    top_best_edge_signatures: tuple[tuple[str, float], ...]
+    top_policy_edge_signatures: tuple[tuple[str, float], ...]
 
 
 @dataclass(frozen=True)
@@ -65,16 +69,56 @@ class RegimeWeightedGreedySummary:
     average_local_defect: float
     top_best_actions: tuple[tuple[str, float], ...]
     top_policy_supports: tuple[tuple[str, float], ...]
+    top_best_edge_signatures: tuple[tuple[str, float], ...]
+    top_policy_edge_signatures: tuple[tuple[str, float], ...]
 
 
 def _format_action(action: tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in action)
 
 
+def _edge_signature(action: tuple[int, ...]) -> tuple[int, ...]:
+    return tuple(
+        1 if action[index] != action[index + 1] else 0
+        for index in range(len(action) - 1)
+    )
+
+
+def _format_edge_signature(sig: tuple[int, ...]) -> str:
+    return "".join(str(bit) for bit in sig)
+
+
 def _format_policy(policy: tuple[tuple[float, tuple[int, ...]], ...], max_items: int = 8) -> str:
     visible = [
         f"{_format_action(action)}:{probability:.3f}"
         for probability, action in policy
+        if probability >= 1e-6
+    ]
+    if len(visible) <= max_items:
+        return ", ".join(visible)
+    return ", ".join(visible[:max_items]) + ", ..."
+
+
+def _policy_edge_signatures(
+    policy: tuple[tuple[float, tuple[int, ...]], ...],
+) -> tuple[tuple[float, tuple[int, ...]], ...]:
+    totals: dict[tuple[int, ...], float] = defaultdict(float)
+    for probability, action in policy:
+        totals[_edge_signature(action)] += probability
+    return tuple(
+        (probability, sig)
+        for sig, probability in sorted(totals.items())
+        if probability > 1e-12
+    )
+
+
+def _format_policy_edge_signatures(
+    policy_edge_signatures: tuple[tuple[float, tuple[int, ...]], ...],
+    max_items: int = 8,
+) -> str:
+    visible = [
+        f"{_format_edge_signature(sig)}:{probability:.3f}"
+        for probability, sig in policy_edge_signatures
         if probability >= 1e-6
     ]
     if len(visible) <= max_items:
@@ -105,7 +149,14 @@ def _parse_int_tuple(text: str) -> tuple[int, ...]:
 def _summarize_weighted_group(
     items: list[WeightedGreedyContribution],
     n: int,
-) -> tuple[float, float, tuple[tuple[str, float], ...], tuple[tuple[str, float], ...]]:
+) -> tuple[
+    float,
+    float,
+    tuple[tuple[str, float], ...],
+    tuple[tuple[str, float], ...],
+    tuple[tuple[str, float], ...],
+    tuple[tuple[str, float], ...],
+]:
     total_contribution = sum(item.contribution for item in items)
     occupancy_mass = sum(item.occupancy_probability for item in items)
     weighted_defect_sum = sum(item.occupancy_probability * item.local_defect for item in items)
@@ -113,9 +164,15 @@ def _summarize_weighted_group(
 
     best_action_totals: dict[str, float] = defaultdict(float)
     policy_support_totals: dict[str, float] = defaultdict(float)
+    best_edge_signature_totals: dict[str, float] = defaultdict(float)
+    policy_edge_signature_totals: dict[str, float] = defaultdict(float)
     for item in items:
         best_action_totals[_format_action(item.best_action)] += item.contribution
         policy_support_totals[_format_policy(item.policy_support)] += item.contribution
+        best_edge_signature_totals[_format_edge_signature(item.best_edge_signature)] += item.contribution
+        policy_edge_signature_totals[
+            _format_policy_edge_signatures(item.policy_edge_signatures)
+        ] += item.contribution
 
     top_best_actions = tuple(
         sorted(best_action_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]
@@ -123,7 +180,20 @@ def _summarize_weighted_group(
     top_policy_supports = tuple(
         sorted(policy_support_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]
     )
-    return total_contribution, average_local_defect, top_best_actions, top_policy_supports
+    top_best_edge_signatures = tuple(
+        sorted(best_edge_signature_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]
+    )
+    top_policy_edge_signatures = tuple(
+        sorted(policy_edge_signature_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]
+    )
+    return (
+        total_contribution,
+        average_local_defect,
+        top_best_actions,
+        top_policy_supports,
+        top_best_edge_signatures,
+        top_policy_edge_signatures,
+    )
 
 
 def summarize_weighted_greedy_by_packet(
@@ -137,10 +207,14 @@ def summarize_weighted_greedy_by_packet(
     summaries: list[PacketWeightedGreedySummary] = []
     for ptype, items in grouped.items():
         occupancy_mass = sum(item.occupancy_probability for item in items)
-        total_contribution, average_local_defect, top_best_actions, top_policy_supports = _summarize_weighted_group(
-            items,
-            n,
-        )
+        (
+            total_contribution,
+            average_local_defect,
+            top_best_actions,
+            top_policy_supports,
+            top_best_edge_signatures,
+            top_policy_edge_signatures,
+        ) = _summarize_weighted_group(items, n)
         summaries.append(
             PacketWeightedGreedySummary(
                 packet_type=ptype,
@@ -149,6 +223,8 @@ def summarize_weighted_greedy_by_packet(
                 average_local_defect=average_local_defect,
                 top_best_actions=top_best_actions,
                 top_policy_supports=top_policy_supports,
+                top_best_edge_signatures=top_best_edge_signatures,
+                top_policy_edge_signatures=top_policy_edge_signatures,
             )
         )
 
@@ -167,10 +243,14 @@ def summarize_weighted_greedy_by_regime(
     summaries: list[RegimeWeightedGreedySummary] = []
     for (ptype, gaps), items in grouped.items():
         occupancy_mass = sum(item.occupancy_probability for item in items)
-        total_contribution, average_local_defect, top_best_actions, top_policy_supports = _summarize_weighted_group(
-            items,
-            n,
-        )
+        (
+            total_contribution,
+            average_local_defect,
+            top_best_actions,
+            top_policy_supports,
+            top_best_edge_signatures,
+            top_policy_edge_signatures,
+        ) = _summarize_weighted_group(items, n)
         summaries.append(
             RegimeWeightedGreedySummary(
                 packet_type=ptype,
@@ -180,6 +260,8 @@ def summarize_weighted_greedy_by_regime(
                 average_local_defect=average_local_defect,
                 top_best_actions=top_best_actions,
                 top_policy_supports=top_policy_supports,
+                top_best_edge_signatures=top_best_edge_signatures,
+                top_policy_edge_signatures=top_policy_edge_signatures,
             )
         )
 
@@ -344,6 +426,7 @@ def occupation_weighted_greedy_defects(k: int, T: int, policy_fn) -> tuple[float
             )
             local_defect = greedy_defect(k, state, continuation, policy_fn)
             policy_support = tuple(policy_fn(state))
+            policy_edge_signatures = _policy_edge_signatures(policy_support)
             contributions.append(
                 WeightedGreedyContribution(
                     time=time,
@@ -354,8 +437,10 @@ def occupation_weighted_greedy_defects(k: int, T: int, policy_fn) -> tuple[float
                     local_defect=local_defect,
                     contribution=occupancy_probability * local_defect,
                     best_action=best_action,
+                    best_edge_signature=_edge_signature(best_action),
                     best_action_value=best_action_value,
                     policy_support=policy_support,
+                    policy_edge_signatures=policy_edge_signatures,
                 )
             )
 
@@ -374,13 +459,19 @@ def print_occupation_weighted_greedy_defects(k: int, T: int, policy_name: str, n
     print(f"total weighted defect: {total_weighted_defect:.6f}")
     print(f"total weighted defect / sqrt(T): {normalized_total:.6f}")
     print()
-    print("time  remaining  state               packet type      occupancy    defect    contribution  best    value     policy support")
+    print(
+        "time  remaining  state               packet type      occupancy    defect"
+        "    contribution  best   edge   value     policy edges      policy support"
+    )
     for item in contributions[:n]:
         print(
             f"{item.time:4d} {item.remaining_horizon:10d} {str(item.state):18s}"
             f" {str(item.packet_type):14s} {item.occupancy_probability:10.6f}"
             f" {item.local_defect:9.6f} {item.contribution:13.6f}"
-            f"  {_format_action(item.best_action):5s}  {item.best_action_value:8.6f}"
+            f"  {_format_action(item.best_action):5s}"
+            f"  {_format_edge_signature(item.best_edge_signature):5s}"
+            f"  {item.best_action_value:8.6f}"
+            f"  {_format_policy_edge_signatures(item.policy_edge_signatures):16s}"
             f"  {_format_policy(item.policy_support)}"
         )
 
@@ -409,6 +500,12 @@ def print_weighted_greedy_by_packet(k: int, T: int, policy_name: str, n: int = 1
         print("  top policy supports by contribution:")
         for support, contribution in summary.top_policy_supports:
             print(f"    {support}: {contribution:.6f}")
+        print("  top best edge signatures by contribution:")
+        for signature, contribution in summary.top_best_edge_signatures:
+            print(f"    {signature}: {contribution:.6f}")
+        print("  top policy edge signatures by contribution:")
+        for signatures, contribution in summary.top_policy_edge_signatures:
+            print(f"    {signatures}: {contribution:.6f}")
         print()
 
 
@@ -437,6 +534,12 @@ def print_weighted_greedy_by_regime(k: int, T: int, policy_name: str, n: int = 1
         print("  top policy supports by contribution:")
         for support, contribution in summary.top_policy_supports:
             print(f"    {support}: {contribution:.6f}")
+        print("  top best edge signatures by contribution:")
+        for signature, contribution in summary.top_best_edge_signatures:
+            print(f"    {signature}: {contribution:.6f}")
+        print("  top policy edge signatures by contribution:")
+        for signatures, contribution in summary.top_policy_edge_signatures:
+            print(f"    {signatures}: {contribution:.6f}")
         print()
 
 
@@ -465,13 +568,51 @@ def print_weighted_greedy_filter(
     print(f"filtered total contribution: {filtered_total:.6f}")
     print(f"overall total weighted defect: {total_weighted_defect:.6f}")
     print()
-    print("time  remaining  state               occupancy    defect    contribution  best    policy support")
+    print(
+        "time  remaining  state               occupancy    defect    contribution"
+        "  best   edge   policy edges      policy support"
+    )
     for item in filtered[:n]:
         print(
             f"{item.time:4d} {item.remaining_horizon:10d} {str(item.state):18s}"
             f" {item.occupancy_probability:10.6f} {item.local_defect:9.6f}"
             f" {item.contribution:13.6f}  {_format_action(item.best_action):5s}"
+            f"  {_format_edge_signature(item.best_edge_signature):5s}"
+            f"  {_format_policy_edge_signatures(item.policy_edge_signatures):16s}"
             f"  {_format_policy(item.policy_support)}"
+        )
+
+
+def print_best_fixed(k: int, T: int, n: int = 20) -> None:
+    zero = tuple(0 for _ in range(k))
+    optimal = optimal_values(k, T)
+    optimal_zero = optimal[T][zero]
+    rows = []
+
+    for size in range(1, k):
+        for subset in combinations(range(1, k + 1), size):
+            if 1 not in subset:
+                continue
+            action = fixed_rank_action(k, set(subset))
+            policy_fn = fixed_rank_policy(set(subset))
+            values = evaluate_balanced_policy(k, T, policy_fn)
+            policy_zero = values[T][zero]
+            gap = optimal_zero - policy_zero
+            normalized_gap = gap / (T ** 0.5 if T > 0 else 1.0)
+            rows.append((policy_zero, action, gap, normalized_gap))
+
+    rows.sort(key=lambda row: (-row[0], _format_action(row[1])))
+
+    print(f"Best fixed-rank policies, k={k}, T={T}")
+    print()
+    print(f"Exact minimax value at zero: {optimal_zero:.6f}")
+    print()
+    print("rank  action   edge    value        gap    gap/sqrt(T)")
+    for rank, (value, action, gap, normalized_gap) in enumerate(rows[:n], start=1):
+        print(
+            f"{rank:4d}  {_format_action(action):7s}"
+            f"  {_format_edge_signature(_edge_signature(action)):7s}"
+            f"  {value:10.6f} {gap:10.6f} {normalized_gap:12.6f}"
         )
 
 
@@ -527,6 +668,11 @@ def _build_parser() -> argparse.ArgumentParser:
     weighted_greedy_filter.add_argument("--packet-gaps", required=True)
     weighted_greedy_filter.add_argument("-n", type=int, default=20)
 
+    best_fixed = subparsers.add_parser("best-fixed")
+    best_fixed.add_argument("--k", type=int, required=True)
+    best_fixed.add_argument("--T", type=int, required=True)
+    best_fixed.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -563,6 +709,9 @@ def main() -> None:
             _parse_int_tuple(args.packet_gaps),
             args.n,
         )
+        return
+    if args.command == "best-fixed":
+        print_best_fixed(args.k, args.T, args.n)
         return
     raise ValueError(f"unknown command: {args.command}")
 

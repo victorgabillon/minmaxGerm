@@ -2,12 +2,24 @@ import pytest
 
 from expert_game_lab.dp_policy import state_occupancy
 from expert_game_lab.experiments import (
+    _edge_signature,
     filter_weighted_greedy_contributions,
     occupation_weighted_greedy_defects,
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
 )
 from expert_game_lab.policies import comb_policy, packet_minimal_frontier_policy
+
+
+@pytest.mark.parametrize(
+    ("action", "expected"),
+    [
+        ((1, 0, 1, 0, 0), (1, 1, 1, 0)),
+        ((1, 0, 1, 0, 1), (1, 1, 1, 1)),
+    ],
+)
+def test_edge_signature(action: tuple[int, ...], expected: tuple[int, ...]) -> None:
+    assert _edge_signature(action) == expected
 
 
 @pytest.mark.parametrize(("k", "T", "policy_fn"), [(2, 4, comb_policy), (3, 5, packet_minimal_frontier_policy)])
@@ -30,6 +42,13 @@ def test_weighted_greedy_runs_on_tiny_instances(k: int, T: int, policy_fn) -> No
     assert contributions
 
 
+@pytest.mark.parametrize(("k", "T", "policy_fn"), [(2, 3, comb_policy), (3, 4, packet_minimal_frontier_policy)])
+def test_policy_edge_signature_probabilities_sum_to_one(k: int, T: int, policy_fn) -> None:
+    _, contributions = occupation_weighted_greedy_defects(k, T, policy_fn)
+    for item in contributions:
+        assert sum(probability for probability, _ in item.policy_edge_signatures) == pytest.approx(1.0)
+
+
 @pytest.mark.parametrize(("k", "T", "policy_fn"), [(2, 4, comb_policy), (3, 5, packet_minimal_frontier_policy)])
 def test_weighted_greedy_packet_summaries_preserve_totals(k: int, T: int, policy_fn) -> None:
     total_defect, contributions = occupation_weighted_greedy_defects(k, T, policy_fn)
@@ -48,6 +67,23 @@ def test_weighted_greedy_regime_summaries_preserve_totals(k: int, T: int, policy
     assert sum(summary.total_contribution for summary in summaries) == pytest.approx(total_defect)
     assert sum(summary.occupancy_mass for summary in summaries) == pytest.approx(float(T))
     assert summaries
+
+
+@pytest.mark.parametrize(("k", "T", "policy_fn"), [(2, 4, comb_policy), (3, 5, packet_minimal_frontier_policy)])
+def test_weighted_greedy_signature_groupings_preserve_totals(k: int, T: int, policy_fn) -> None:
+    total_defect, contributions = occupation_weighted_greedy_defects(k, T, policy_fn)
+    best_signature_totals: dict[tuple[int, ...], float] = {}
+    policy_signature_totals: dict[tuple[tuple[float, tuple[int, ...]], ...], float] = {}
+    for item in contributions:
+        best_signature_totals[item.best_edge_signature] = (
+            best_signature_totals.get(item.best_edge_signature, 0.0) + item.contribution
+        )
+        policy_signature_totals[item.policy_edge_signatures] = (
+            policy_signature_totals.get(item.policy_edge_signatures, 0.0) + item.contribution
+        )
+
+    assert sum(best_signature_totals.values()) == pytest.approx(total_defect)
+    assert sum(policy_signature_totals.values()) == pytest.approx(total_defect)
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:
