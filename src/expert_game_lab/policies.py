@@ -201,3 +201,25 @@ def packet_regime5b_policy(x: tuple[int, ...]) -> Policy:
         return _balanced_from_base([(1.0, action) for action in base_actions])
 
     return packet_regime5_policy(state)
+
+
+def packet_regime5c_policy(x: tuple[int, ...]) -> Policy:
+    state = canon(x)
+    if not state:
+        return [(1.0, ())]
+
+    if len(state) != 5:
+        return packet_regime5b_policy(state)
+
+    state_packets = packets(state)
+    packet_sizes = tuple(len(packet) for packet in state_packets)
+    packet_values = tuple(state[packet[0]] for packet in state_packets)
+    packet_gaps = tuple(
+        packet_values[index] - packet_values[index + 1]
+        for index in range(len(packet_values) - 1)
+    )
+
+    if packet_sizes in {(2, 3), (3, 2)} and packet_gaps == (1,):
+        return _balanced_from_base([(1.0, (1, 0, 1, 0, 0))])
+
+    return packet_regime5b_policy(state)

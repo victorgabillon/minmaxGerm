@@ -6,6 +6,7 @@ from expert_game_lab.policies import (
     packet_minimal_frontier_policy,
     packet_regime5_policy,
     packet_regime5b_policy,
+    packet_regime5c_policy,
 )
 
 
@@ -264,3 +265,50 @@ def test_packet_regime5b_policy_uses_local_chase_rule_at_near_collision_frontier
 
 def test_packet_regime5b_policy_falls_back_to_packet_regime5_outside_special_rule() -> None:
     assert packet_regime5b_policy((1, 1, 1, 1, 0)) == packet_regime5_policy((1, 1, 1, 1, 0))
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        (1, 1, 0, 0, 0),
+        (1, 1, 1, 0, 0),
+        (2, 1, 1, 0, 0),
+    ],
+)
+def test_packet_regime5c_policy_probabilities_sum_to_one(state: tuple[int, ...]) -> None:
+    policy = packet_regime5c_policy(state)
+    assert sum(probability for probability, _ in policy) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        (1, 1, 0, 0, 0),
+        (1, 1, 1, 0, 0),
+        (2, 1, 1, 0, 0),
+    ],
+)
+def test_packet_regime5c_policy_is_coordinate_balanced(state: tuple[int, ...]) -> None:
+    policy = packet_regime5c_policy(state)
+    expected_bits = [0.0] * len(state)
+    for probability, action in policy:
+        for index, bit in enumerate(action):
+            expected_bits[index] += probability * bit
+    for value in expected_bits:
+        assert value == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("state", [(1, 1, 0, 0, 0), (1, 1, 1, 0, 0)])
+def test_packet_regime5c_policy_uses_chase_support_on_two_packet_near_collision_states(
+    state: tuple[int, ...],
+) -> None:
+    policy = packet_regime5c_policy(state)
+    support = {action for _, action in policy}
+    assert support == {
+        (1, 0, 1, 0, 0),
+        (0, 1, 0, 1, 1),
+    }
+
+
+def test_packet_regime5c_policy_matches_packet_regime5b_on_three_packet_near_collision_state() -> None:
+    assert packet_regime5c_policy((2, 1, 1, 0, 0)) == packet_regime5b_policy((2, 1, 1, 0, 0))

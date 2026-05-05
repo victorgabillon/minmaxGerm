@@ -11,6 +11,7 @@ from .policies import (
     packet_minimal_frontier_policy,
     packet_regime5_policy,
     packet_regime5b_policy,
+    packet_regime5c_policy,
 )
 from .state import all_states, canon, packets
 
@@ -36,6 +37,7 @@ __all__ = [
     "packet_minimal_frontier_policy",
     "packet_regime5_policy",
     "packet_regime5b_policy",
+    "packet_regime5c_policy",
     "packets",
     "solve_minimax_step",
     "state_occupancy",
