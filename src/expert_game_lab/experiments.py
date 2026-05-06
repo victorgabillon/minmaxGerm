@@ -158,11 +158,103 @@ def _local_edge_action_library(k: int) -> tuple[tuple[int, ...], ...]:
     return tuple(sorted(actions, key=_format_action))
 
 
-def _action_library(k: int, library_name: str) -> tuple[tuple[int, ...], ...]:
+def _actions_from_edge_signatures(
+    signatures: set[tuple[int, ...]],
+) -> tuple[tuple[int, ...], ...]:
+    actions: set[tuple[int, ...]] = set()
+    for sig in signatures:
+        if not any(sig):
+            continue
+        action = _action_from_edge_signature(sig)
+        actions.add(action)
+        actions.add(complement(action))
+    return tuple(sorted(actions, key=_format_action))
+
+
+def _one_run_edge_action_library(k: int) -> tuple[tuple[int, ...], ...]:
+    if k < 0:
+        raise ValueError("k must be nonnegative")
+    signatures: set[tuple[int, ...]] = set()
+    for edge_bits in range(1, 2 ** max(k - 1, 0)):
+        sig = tuple((edge_bits >> index) & 1 for index in reversed(range(k - 1)))
+        if _edge_signature_run_count(sig) <= 1:
+            signatures.add(sig)
+    return _actions_from_edge_signatures(signatures)
+
+
+def _prefix_one_run_action_library(k: int) -> tuple[tuple[int, ...], ...]:
+    if k < 0:
+        raise ValueError("k must be nonnegative")
+    edge_count = max(k - 1, 0)
+    signatures = {
+        tuple(1 if index < run_length else 0 for index in range(edge_count))
+        for run_length in range(1, edge_count + 1)
+    }
+    return _actions_from_edge_signatures(signatures)
+
+
+def _prefix_plus_tail_anchor_action_library(k: int) -> tuple[tuple[int, ...], ...]:
+    if k < 0:
+        raise ValueError("k must be nonnegative")
+    edge_count = max(k - 1, 0)
+    signatures: set[tuple[int, ...]] = set()
+
+    for prefix_length in range(1, edge_count):
+        signatures.add(tuple(1 if index < prefix_length else 0 for index in range(edge_count)))
+
+    for prefix_length in range(1, edge_count):
+        for tail_length in range(1, edge_count - prefix_length):
+            gap_length = edge_count - prefix_length - tail_length
+            if gap_length < 1:
+                continue
+            signatures.add((1,) * prefix_length + (0,) * gap_length + (1,) * tail_length)
+
+    return _actions_from_edge_signatures(signatures)
+
+
+def _best_fixed_top_action_library(k: int, T: int, top_fixed_size: int) -> tuple[tuple[int, ...], ...]:
+    if top_fixed_size <= 0:
+        raise ValueError("top_fixed_size must be positive")
+
+    zero = tuple(0 for _ in range(k))
+    rows: list[tuple[float, tuple[int, ...]]] = []
+    for size in range(1, k):
+        for subset in combinations(range(1, k + 1), size):
+            if 1 not in subset:
+                continue
+            action = fixed_rank_action(k, set(subset))
+            policy_fn = fixed_rank_policy(set(subset))
+            values = evaluate_balanced_policy(k, T, policy_fn)
+            rows.append((values[T][zero], action))
+
+    rows.sort(key=lambda row: (-row[0], _format_action(row[1])))
+    actions: set[tuple[int, ...]] = set()
+    for _, action in rows[:top_fixed_size]:
+        actions.add(action)
+        actions.add(complement(action))
+    return tuple(sorted(actions, key=_format_action))
+
+
+def _action_library(
+    k: int,
+    library_name: str,
+    T: int | None = None,
+    top_fixed_size: int = 20,
+) -> tuple[tuple[int, ...], ...]:
+    if library_name == "one_run_edges":
+        return _one_run_edge_action_library(k)
+    if library_name == "prefix_one_run":
+        return _prefix_one_run_action_library(k)
+    if library_name == "prefix_plus_tail_anchor":
+        return _prefix_plus_tail_anchor_action_library(k)
     if library_name == "local_edges":
         return _local_edge_action_library(k)
     if library_name == "all":
         return tuple(all_actions(k))
+    if library_name == "best_fixed_top":
+        if T is None:
+            raise ValueError("T is required for best_fixed_top")
+        return _best_fixed_top_action_library(k, T, top_fixed_size)
     raise ValueError(f"unknown library: {library_name}")
 
 
@@ -391,11 +483,12 @@ def library_oracle(
     T: int,
     library_name: str,
     occupancy_policy_fn,
+    top_fixed_size: int = 20,
 ) -> tuple[float, float, float, list[LibraryOracleContribution]]:
     occupancy = state_occupancy(k, T, occupancy_policy_fn)
     optimal = optimal_values(k, T)
     action_list = all_actions(k)
-    library_actions = _action_library(k, library_name)
+    library_actions = _action_library(k, library_name, T=T, top_fixed_size=top_fixed_size)
 
     total_unrestricted_value = 0.0
     total_library_value = 0.0
@@ -843,18 +936,20 @@ def print_library_oracle(
     T: int,
     library_name: str,
     occupancy_policy_name: str,
+    top_fixed_size: int = 20,
     n: int = 20,
 ) -> None:
     policies = _policy_registry(k)
     if occupancy_policy_name not in policies:
         raise ValueError(f"unknown occupancy policy: {occupancy_policy_name}")
 
-    library_actions = _action_library(k, library_name)
+    library_actions = _action_library(k, library_name, T=T, top_fixed_size=top_fixed_size)
     total_unrestricted_value, total_library_value, total_loss, contributions = library_oracle(
         k,
         T,
         library_name,
         policies[occupancy_policy_name],
+        top_fixed_size=top_fixed_size,
     )
     normalized_loss = total_loss / (T ** 0.5 if T > 0 else 1.0)
     summaries = summarize_library_oracle_by_regime(contributions, n=n)
@@ -863,6 +958,8 @@ def print_library_oracle(
     print()
     print(f"occupancy policy: {occupancy_policy_name}")
     print(f"library size: {len(library_actions)}")
+    if library_name == "best_fixed_top":
+        print(f"top fixed size: {top_fixed_size}")
     print(f"total unrestricted greedy value: {total_unrestricted_value:.6f}")
     print(f"total library-restricted greedy value: {total_library_value:.6f}")
     print(f"loss from restricting to library: {total_loss:.6f}")
@@ -965,6 +1062,7 @@ def _build_parser() -> argparse.ArgumentParser:
     library_oracle_parser.add_argument("--T", type=int, required=True)
     library_oracle_parser.add_argument("--library", default="local_edges")
     library_oracle_parser.add_argument("--occupancy-policy", default="comb")
+    library_oracle_parser.add_argument("--top-fixed-size", type=int, default=20)
     library_oracle_parser.add_argument("-n", type=int, default=20)
 
     return parser
@@ -1013,7 +1111,8 @@ def main() -> None:
             args.T,
             args.library,
             args.occupancy_policy,
-            args.n,
+            top_fixed_size=args.top_fixed_size,
+            n=args.n,
         )
         return
     raise ValueError(f"unknown command: {args.command}")

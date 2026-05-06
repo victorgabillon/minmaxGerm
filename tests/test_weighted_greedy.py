@@ -3,6 +3,9 @@ import pytest
 from expert_game_lab.dp_policy import state_occupancy
 from expert_game_lab.experiments import (
     _edge_signature,
+    _one_run_edge_action_library,
+    _prefix_one_run_action_library,
+    _prefix_plus_tail_anchor_action_library,
     _local_edge_action_library,
     filter_weighted_greedy_contributions,
     library_oracle,
@@ -31,6 +34,19 @@ def test_local_edge_action_library_contains_expected_motifs() -> None:
     assert (1, 0, 1, 0, 0) in library5
     assert (1, 0, 1, 0, 1) in library5
     assert (1, 0, 1, 0, 0, 1) in library6
+
+
+def test_strict_action_libraries_have_expected_membership() -> None:
+    one_run6 = set(_one_run_edge_action_library(6))
+    prefix6 = set(_prefix_one_run_action_library(6))
+    prefix_tail6 = set(_prefix_plus_tail_anchor_action_library(6))
+
+    assert (1, 0, 1, 0, 0, 0) in one_run6
+    assert (1, 0, 1, 0, 0, 1) not in one_run6
+    assert (1, 0, 1, 0, 0, 0) in prefix6
+    assert (0, 0, 1, 0, 1, 0) not in prefix6
+    assert (1, 0, 1, 0, 0, 1) in prefix_tail6
+    assert (1, 0, 1, 0, 1, 0) not in prefix_tail6
 
 
 @pytest.mark.parametrize(("k", "T", "policy_fn"), [(2, 4, comb_policy), (3, 5, packet_minimal_frontier_policy)])
