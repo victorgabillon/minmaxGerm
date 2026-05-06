@@ -3,7 +3,9 @@ import pytest
 from expert_game_lab.dp_policy import state_occupancy
 from expert_game_lab.experiments import (
     _edge_signature,
+    _local_edge_action_library,
     filter_weighted_greedy_contributions,
+    library_oracle,
     occupation_weighted_greedy_defects,
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
@@ -20,6 +22,15 @@ from expert_game_lab.policies import comb_policy, packet_minimal_frontier_policy
 )
 def test_edge_signature(action: tuple[int, ...], expected: tuple[int, ...]) -> None:
     assert _edge_signature(action) == expected
+
+
+def test_local_edge_action_library_contains_expected_motifs() -> None:
+    library5 = set(_local_edge_action_library(5))
+    library6 = set(_local_edge_action_library(6))
+
+    assert (1, 0, 1, 0, 0) in library5
+    assert (1, 0, 1, 0, 1) in library5
+    assert (1, 0, 1, 0, 0, 1) in library6
 
 
 @pytest.mark.parametrize(("k", "T", "policy_fn"), [(2, 4, comb_policy), (3, 5, packet_minimal_frontier_policy)])
@@ -84,6 +95,13 @@ def test_weighted_greedy_signature_groupings_preserve_totals(k: int, T: int, pol
 
     assert sum(best_signature_totals.values()) == pytest.approx(total_defect)
     assert sum(policy_signature_totals.values()) == pytest.approx(total_defect)
+
+
+def test_all_action_library_oracle_has_zero_restriction_loss() -> None:
+    _, _, total_loss, contributions = library_oracle(3, 4, "all", comb_policy)
+
+    assert total_loss == pytest.approx(0.0)
+    assert sum(item.loss for item in contributions) == pytest.approx(0.0)
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:

@@ -5,7 +5,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from itertools import combinations
 
-from .actions import all_actions, comb_action, fixed_rank_action
+from .actions import all_actions, comb_action, complement, fixed_rank_action
 from .defects import commutation_defect, commutation_defect_mixed, greedy_defect
 from .dp_optimal import optimal_values
 from .dp_policy import evaluate_balanced_policy, state_occupancy
@@ -73,6 +73,35 @@ class RegimeWeightedGreedySummary:
     top_policy_edge_signatures: tuple[tuple[str, float], ...]
 
 
+@dataclass(frozen=True)
+class LibraryOracleContribution:
+    time: int
+    remaining_horizon: int
+    state: tuple[int, ...]
+    packet_type: tuple[int, ...]
+    packet_gaps: tuple[int, ...]
+    occupancy_probability: float
+    unrestricted_action: tuple[int, ...]
+    unrestricted_score: float
+    library_action: tuple[int, ...]
+    library_score: float
+    loss: float
+
+
+@dataclass(frozen=True)
+class LibraryOracleRegimeSummary:
+    packet_type: tuple[int, ...]
+    packet_gaps: tuple[int, ...]
+    total_loss: float
+    occupancy_mass: float
+    unrestricted_value: float
+    library_value: float
+    top_unrestricted_actions: tuple[tuple[str, float], ...]
+    top_library_actions: tuple[tuple[str, float], ...]
+    top_unrestricted_edge_signatures: tuple[tuple[str, float], ...]
+    top_library_edge_signatures: tuple[tuple[str, float], ...]
+
+
 def _format_action(action: tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in action)
 
@@ -86,6 +115,55 @@ def _edge_signature(action: tuple[int, ...]) -> tuple[int, ...]:
 
 def _format_edge_signature(sig: tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in sig)
+
+
+def _action_from_edge_signature(sig: tuple[int, ...], first_bit: int = 1) -> tuple[int, ...]:
+    bits = [first_bit]
+    for edge in sig:
+        bits.append(bits[-1] if edge == 0 else 1 - bits[-1])
+    return tuple(bits)
+
+
+def _edge_signature_run_count(sig: tuple[int, ...]) -> int:
+    runs = 0
+    in_run = False
+    for edge in sig:
+        if edge == 1 and not in_run:
+            runs += 1
+            in_run = True
+        elif edge == 0:
+            in_run = False
+    return runs
+
+
+def _local_edge_action_library(k: int) -> tuple[tuple[int, ...], ...]:
+    if k < 0:
+        raise ValueError("k must be nonnegative")
+    if k == 0:
+        return ((),)
+
+    actions: set[tuple[int, ...]] = set()
+    for action in (comb_action(k),):
+        actions.add(action)
+        actions.add(complement(action))
+
+    for edge_bits in range(1, 2 ** max(k - 1, 0)):
+        sig = tuple((edge_bits >> index) & 1 for index in reversed(range(k - 1)))
+        if _edge_signature_run_count(sig) > 2:
+            continue
+        action = _action_from_edge_signature(sig)
+        actions.add(action)
+        actions.add(complement(action))
+
+    return tuple(sorted(actions, key=_format_action))
+
+
+def _action_library(k: int, library_name: str) -> tuple[tuple[int, ...], ...]:
+    if library_name == "local_edges":
+        return _local_edge_action_library(k)
+    if library_name == "all":
+        return tuple(all_actions(k))
+    raise ValueError(f"unknown library: {library_name}")
 
 
 def _format_policy(policy: tuple[tuple[float, tuple[int, ...]], ...], max_items: int = 8) -> str:
@@ -282,6 +360,150 @@ def filter_weighted_greedy_contributions(
             continue
         filtered.append(item)
     return filtered
+
+
+def _top_weighted_actions(
+    contributions: list[LibraryOracleContribution],
+    action_getter,
+    weight_getter,
+    n: int,
+) -> tuple[tuple[str, float], ...]:
+    totals: dict[str, float] = defaultdict(float)
+    for item in contributions:
+        totals[_format_action(action_getter(item))] += weight_getter(item)
+    return tuple(sorted(totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n])
+
+
+def _top_weighted_edge_signatures(
+    contributions: list[LibraryOracleContribution],
+    action_getter,
+    weight_getter,
+    n: int,
+) -> tuple[tuple[str, float], ...]:
+    totals: dict[str, float] = defaultdict(float)
+    for item in contributions:
+        totals[_format_edge_signature(_edge_signature(action_getter(item)))] += weight_getter(item)
+    return tuple(sorted(totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n])
+
+
+def library_oracle(
+    k: int,
+    T: int,
+    library_name: str,
+    occupancy_policy_fn,
+) -> tuple[float, float, float, list[LibraryOracleContribution]]:
+    occupancy = state_occupancy(k, T, occupancy_policy_fn)
+    optimal = optimal_values(k, T)
+    action_list = all_actions(k)
+    library_actions = _action_library(k, library_name)
+
+    total_unrestricted_value = 0.0
+    total_library_value = 0.0
+    contributions: list[LibraryOracleContribution] = []
+
+    for time in range(T):
+        remaining_horizon = T - time
+        continuation = optimal[remaining_horizon - 1]
+        for state, occupancy_probability in occupancy[time].items():
+            q_by_action = {
+                action: _next_state_value(state, action, continuation)
+                for action in action_list
+            }
+            solution = solve_minimax_step(q_by_action, k)
+            if not solution.success:
+                raise RuntimeError(f"LP failed at state {state}: {solution.message}")
+
+            def score(action: tuple[int, ...]) -> float:
+                return q_by_action[action] - sum(solution.p[index] * action[index] for index in range(k))
+
+            unrestricted_action = max(action_list, key=score)
+            library_action = max(library_actions, key=score)
+            unrestricted_score = score(unrestricted_action)
+            library_score = score(library_action)
+            loss = max(0.0, unrestricted_score - library_score)
+            weighted_unrestricted_score = occupancy_probability * unrestricted_score
+            weighted_library_score = occupancy_probability * library_score
+
+            total_unrestricted_value += weighted_unrestricted_score
+            total_library_value += weighted_library_score
+            contributions.append(
+                LibraryOracleContribution(
+                    time=time,
+                    remaining_horizon=remaining_horizon,
+                    state=state,
+                    packet_type=packet_type(state),
+                    packet_gaps=_packet_gaps(state),
+                    occupancy_probability=occupancy_probability,
+                    unrestricted_action=unrestricted_action,
+                    unrestricted_score=unrestricted_score,
+                    library_action=library_action,
+                    library_score=library_score,
+                    loss=occupancy_probability * loss,
+                )
+            )
+
+    total_loss = total_unrestricted_value - total_library_value
+    contributions.sort(key=lambda item: item.loss, reverse=True)
+    return total_unrestricted_value, total_library_value, total_loss, contributions
+
+
+def summarize_library_oracle_by_regime(
+    contributions: list[LibraryOracleContribution],
+    n: int = 10,
+) -> list[LibraryOracleRegimeSummary]:
+    grouped: dict[tuple[tuple[int, ...], tuple[int, ...]], list[LibraryOracleContribution]] = defaultdict(list)
+    for item in contributions:
+        grouped[(item.packet_type, item.packet_gaps)].append(item)
+
+    summaries: list[LibraryOracleRegimeSummary] = []
+    for (ptype, gaps), items in grouped.items():
+        occupancy_mass = sum(item.occupancy_probability for item in items)
+        unrestricted_value = sum(
+            item.occupancy_probability * item.unrestricted_score
+            for item in items
+        )
+        library_value = sum(
+            item.occupancy_probability * item.library_score
+            for item in items
+        )
+        total_loss = sum(item.loss for item in items)
+        summaries.append(
+            LibraryOracleRegimeSummary(
+                packet_type=ptype,
+                packet_gaps=gaps,
+                total_loss=total_loss,
+                occupancy_mass=occupancy_mass,
+                unrestricted_value=unrestricted_value,
+                library_value=library_value,
+                top_unrestricted_actions=_top_weighted_actions(
+                    items,
+                    lambda item: item.unrestricted_action,
+                    lambda item: item.occupancy_probability * item.unrestricted_score,
+                    n,
+                ),
+                top_library_actions=_top_weighted_actions(
+                    items,
+                    lambda item: item.library_action,
+                    lambda item: item.occupancy_probability * item.library_score,
+                    n,
+                ),
+                top_unrestricted_edge_signatures=_top_weighted_edge_signatures(
+                    items,
+                    lambda item: item.unrestricted_action,
+                    lambda item: item.occupancy_probability * item.unrestricted_score,
+                    n,
+                ),
+                top_library_edge_signatures=_top_weighted_edge_signatures(
+                    items,
+                    lambda item: item.library_action,
+                    lambda item: item.occupancy_probability * item.library_score,
+                    n,
+                ),
+            )
+        )
+
+    summaries.sort(key=lambda item: item.total_loss, reverse=True)
+    return summaries
 
 
 def _policy_registry(k: int) -> dict[str, object]:
@@ -616,6 +838,71 @@ def print_best_fixed(k: int, T: int, n: int = 20) -> None:
         )
 
 
+def print_library_oracle(
+    k: int,
+    T: int,
+    library_name: str,
+    occupancy_policy_name: str,
+    n: int = 20,
+) -> None:
+    policies = _policy_registry(k)
+    if occupancy_policy_name not in policies:
+        raise ValueError(f"unknown occupancy policy: {occupancy_policy_name}")
+
+    library_actions = _action_library(k, library_name)
+    total_unrestricted_value, total_library_value, total_loss, contributions = library_oracle(
+        k,
+        T,
+        library_name,
+        policies[occupancy_policy_name],
+    )
+    normalized_loss = total_loss / (T ** 0.5 if T > 0 else 1.0)
+    summaries = summarize_library_oracle_by_regime(contributions, n=n)
+
+    print(f"Library oracle for {library_name}, k={k}, T={T}")
+    print()
+    print(f"occupancy policy: {occupancy_policy_name}")
+    print(f"library size: {len(library_actions)}")
+    print(f"total unrestricted greedy value: {total_unrestricted_value:.6f}")
+    print(f"total library-restricted greedy value: {total_library_value:.6f}")
+    print(f"loss from restricting to library: {total_loss:.6f}")
+    print(f"loss from restricting to library / sqrt(T): {normalized_loss:.6f}")
+    print()
+    print("Top regimes where library fails:")
+    for summary in summaries[:n]:
+        if summary.total_loss <= 1e-12:
+            continue
+        print(f"packet type: {summary.packet_type}")
+        print(f"packet gaps: {summary.packet_gaps}")
+        print(f"  total loss: {summary.total_loss:.6f}")
+        print(f"  occupancy mass: {summary.occupancy_mass:.6f}")
+        print(f"  unrestricted value: {summary.unrestricted_value:.6f}")
+        print(f"  library value: {summary.library_value:.6f}")
+        print("  top unrestricted actions by value:")
+        for action, value in summary.top_unrestricted_actions:
+            print(f"    {action}: {value:.6f}")
+        print("  top library actions by value:")
+        for action, value in summary.top_library_actions:
+            print(f"    {action}: {value:.6f}")
+        print("  top unrestricted edge signatures by value:")
+        for signature, value in summary.top_unrestricted_edge_signatures:
+            print(f"    {signature}: {value:.6f}")
+        print("  top library edge signatures by value:")
+        for signature, value in summary.top_library_edge_signatures:
+            print(f"    {signature}: {value:.6f}")
+        print()
+
+    print("Top selected library actions overall:")
+    top_library_actions = _top_weighted_actions(
+        contributions,
+        lambda item: item.library_action,
+        lambda item: item.occupancy_probability * item.library_score,
+        n,
+    )
+    for action, value in top_library_actions:
+        print(f"  {action} edge={_format_edge_signature(_edge_signature(tuple(int(bit) for bit in action)))} value={value:.6f}")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Finite-horizon expert game experiments")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -673,6 +960,13 @@ def _build_parser() -> argparse.ArgumentParser:
     best_fixed.add_argument("--T", type=int, required=True)
     best_fixed.add_argument("-n", type=int, default=20)
 
+    library_oracle_parser = subparsers.add_parser("library-oracle")
+    library_oracle_parser.add_argument("--k", type=int, required=True)
+    library_oracle_parser.add_argument("--T", type=int, required=True)
+    library_oracle_parser.add_argument("--library", default="local_edges")
+    library_oracle_parser.add_argument("--occupancy-policy", default="comb")
+    library_oracle_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -712,6 +1006,15 @@ def main() -> None:
         return
     if args.command == "best-fixed":
         print_best_fixed(args.k, args.T, args.n)
+        return
+    if args.command == "library-oracle":
+        print_library_oracle(
+            args.k,
+            args.T,
+            args.library,
+            args.occupancy_policy,
+            args.n,
+        )
         return
     raise ValueError(f"unknown command: {args.command}")
 
