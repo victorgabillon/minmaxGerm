@@ -130,6 +130,28 @@ class OneRunOracleAnalysisRow:
     is_longest_min_sum_gap: bool
 
 
+@dataclass(frozen=True)
+class OneRunTieAnalysisRow:
+    time: int
+    remaining_horizon: int
+    state: tuple[int, ...]
+    packet_type: tuple[int, ...]
+    packet_gaps: tuple[int, ...]
+    occupancy_probability: float
+    unrestricted_best_score: float
+    optimal_one_run_count: int
+    exists_min_sum_gap: bool
+    exists_min_max_gap: bool
+    exists_top_prefix: bool
+    exists_prefix_plus_tail_anchor: bool
+    smallest_sum_signature: tuple[int, ...]
+    smallest_sum_stats: BlockGapStats
+    topmost_signature: tuple[int, ...]
+    topmost_stats: BlockGapStats
+    longest_signature: tuple[int, ...]
+    longest_stats: BlockGapStats
+
+
 def _format_action(action: tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in action)
 
@@ -218,6 +240,13 @@ def _block_gap_stats(
     if len(intervals) != 1:
         return None
     return _block_gap_stats_from_interval(_gap_vector(state), intervals[0])
+
+
+def _prefix_plus_tail_anchor_signatures(k: int) -> set[tuple[int, ...]]:
+    return {
+        _edge_signature(action)
+        for action in _prefix_plus_tail_anchor_action_library(k)
+    }
 
 
 def _local_edge_action_library(k: int) -> tuple[tuple[int, ...], ...]:
@@ -766,6 +795,137 @@ def one_run_oracle_analysis(
     )
 
 
+def one_run_tie_analysis(
+    k: int,
+    T: int,
+    occupancy_policy_fn,
+    tolerance: float = 1e-9,
+) -> tuple[list[OneRunTieAnalysisRow], float, float, float, float]:
+    occupancy = state_occupancy(k, T, occupancy_policy_fn)
+    optimal = optimal_values(k, T)
+    action_list = all_actions(k)
+    one_run_actions = _one_run_edge_action_library(k)
+    prefix_plus_tail_signatures = _prefix_plus_tail_anchor_signatures(k)
+    rows: list[OneRunTieAnalysisRow] = []
+    total_occupancy_weight = 0.0
+    total_value_weight = 0.0
+    optimal_one_run_occupancy_weight = 0.0
+    optimal_one_run_value_weight = 0.0
+
+    for time in range(T):
+        remaining_horizon = T - time
+        continuation = optimal[remaining_horizon - 1]
+        for state, occupancy_probability in occupancy[time].items():
+            q_by_action = {
+                action: _next_state_value(state, action, continuation)
+                for action in action_list
+            }
+            solution = solve_minimax_step(q_by_action, k)
+            if not solution.success:
+                raise RuntimeError(f"LP failed at state {state}: {solution.message}")
+
+            def score(action: tuple[int, ...]) -> float:
+                return q_by_action[action] - sum(solution.p[index] * action[index] for index in range(k))
+
+            unrestricted_best_score = max(score(action) for action in action_list)
+            value_weight = occupancy_probability * unrestricted_best_score
+            total_occupancy_weight += occupancy_probability
+            total_value_weight += value_weight
+
+            optimal_one_run_items: list[tuple[tuple[int, ...], BlockGapStats]] = []
+            for action in one_run_actions:
+                if score(action) < unrestricted_best_score - tolerance:
+                    continue
+                sig = _edge_signature(action)
+                stats = _block_gap_stats(state, sig)
+                if stats is not None:
+                    optimal_one_run_items.append((sig, stats))
+
+            if not optimal_one_run_items:
+                continue
+
+            gaps = _gap_vector(state)
+            all_stats = tuple(
+                _block_gap_stats_from_interval(gaps, interval)
+                for interval in _all_edge_blocks(len(gaps))
+            )
+            min_sum_gap = min(item.sum_gap for item in all_stats)
+            min_max_gap = min(item.max_gap for item in all_stats)
+
+            smallest_sum_sig, smallest_sum_stats = min(
+                optimal_one_run_items,
+                key=lambda item: (
+                    item[1].sum_gap,
+                    item[1].start,
+                    -item[1].length,
+                    _format_edge_signature(item[0]),
+                ),
+            )
+            topmost_sig, topmost_stats = min(
+                optimal_one_run_items,
+                key=lambda item: (
+                    item[1].start,
+                    item[1].sum_gap,
+                    -item[1].length,
+                    _format_edge_signature(item[0]),
+                ),
+            )
+            longest_sig, longest_stats = min(
+                optimal_one_run_items,
+                key=lambda item: (
+                    -item[1].length,
+                    item[1].sum_gap,
+                    item[1].start,
+                    _format_edge_signature(item[0]),
+                ),
+            )
+
+            optimal_one_run_occupancy_weight += occupancy_probability
+            optimal_one_run_value_weight += value_weight
+            rows.append(
+                OneRunTieAnalysisRow(
+                    time=time,
+                    remaining_horizon=remaining_horizon,
+                    state=state,
+                    packet_type=packet_type(state),
+                    packet_gaps=_packet_gaps(state),
+                    occupancy_probability=occupancy_probability,
+                    unrestricted_best_score=unrestricted_best_score,
+                    optimal_one_run_count=len(optimal_one_run_items),
+                    exists_min_sum_gap=any(
+                        stats.sum_gap == min_sum_gap
+                        for _, stats in optimal_one_run_items
+                    ),
+                    exists_min_max_gap=any(
+                        stats.max_gap == min_max_gap
+                        for _, stats in optimal_one_run_items
+                    ),
+                    exists_top_prefix=any(
+                        stats.start == 0
+                        for _, stats in optimal_one_run_items
+                    ),
+                    exists_prefix_plus_tail_anchor=any(
+                        sig in prefix_plus_tail_signatures
+                        for sig, _ in optimal_one_run_items
+                    ),
+                    smallest_sum_signature=smallest_sum_sig,
+                    smallest_sum_stats=smallest_sum_stats,
+                    topmost_signature=topmost_sig,
+                    topmost_stats=topmost_stats,
+                    longest_signature=longest_sig,
+                    longest_stats=longest_stats,
+                )
+            )
+
+    return (
+        rows,
+        total_occupancy_weight,
+        total_value_weight,
+        optimal_one_run_occupancy_weight,
+        optimal_one_run_value_weight,
+    )
+
+
 def _policy_registry(k: int) -> dict[str, object]:
     policies: dict[str, object] = {
         "comb": comb_policy,
@@ -1247,6 +1407,113 @@ def print_one_run_oracle_analysis(
         print(f"  packet type={ptype} gaps={gaps}: {weight:.6f}")
 
 
+def print_one_run_tie_analysis(
+    k: int,
+    T: int,
+    occupancy_policy_name: str,
+    tolerance: float = 1e-9,
+    n: int = 20,
+) -> None:
+    policies = _policy_registry(k)
+    if occupancy_policy_name not in policies:
+        raise ValueError(f"unknown occupancy policy: {occupancy_policy_name}")
+
+    (
+        rows,
+        total_occupancy_weight,
+        total_value_weight,
+        optimal_one_run_occupancy_weight,
+        optimal_one_run_value_weight,
+    ) = one_run_tie_analysis(k, T, policies[occupancy_policy_name], tolerance=tolerance)
+
+    def occupancy_weight(row: OneRunTieAnalysisRow) -> float:
+        return row.occupancy_probability
+
+    def value_weight(row: OneRunTieAnalysisRow) -> float:
+        return row.occupancy_probability * row.unrestricted_best_score
+
+    def weighted_rate(predicate, weight_getter) -> float:
+        denominator = sum(weight_getter(row) for row in rows)
+        if denominator <= 0:
+            return 0.0
+        return sum(weight_getter(row) for row in rows if predicate(row)) / denominator
+
+    def print_rate(label: str, predicate) -> None:
+        print(
+            f"{label:34s}"
+            f" occupancy={100.0 * weighted_rate(predicate, occupancy_weight):8.3f}%"
+            f" value={100.0 * weighted_rate(predicate, value_weight):8.3f}%"
+        )
+
+    def print_canonical_distribution(
+        title: str,
+        signature_getter,
+        stats_getter,
+    ) -> None:
+        interval_totals: dict[tuple[int, int], float] = defaultdict(float)
+        signature_totals: dict[str, float] = defaultdict(float)
+        length_totals: dict[int, float] = defaultdict(float)
+        for row in rows:
+            weight = value_weight(row)
+            stats = stats_getter(row)
+            interval_totals[stats.interval] += weight
+            signature_totals[_format_edge_signature(signature_getter(row))] += weight
+            length_totals[stats.length] += weight
+
+        print(title)
+        print("  intervals:")
+        for interval, weight in sorted(interval_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
+            print(f"    {interval}: {weight:.6f}")
+        print("  signatures:")
+        for signature, weight in sorted(signature_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
+            print(f"    {signature}: {weight:.6f}")
+        print("  lengths:")
+        for length, weight in sorted(length_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
+            print(f"    {length}: {weight:.6f}")
+        print()
+
+    visited_rows = sum(len(layer) for layer in state_occupancy(k, T, policies[occupancy_policy_name])[:-1])
+    print(f"One-run tie analysis, k={k}, T={T}")
+    print()
+    print(f"occupancy policy: {occupancy_policy_name}")
+    print(f"tolerance: {tolerance:.3g}")
+    print(f"visited rows: {visited_rows}")
+    print(f"rows with optimal one-run action: {len(rows)}")
+    print(
+        "optimal one-run occupancy coverage:"
+        f" {optimal_one_run_occupancy_weight / total_occupancy_weight if total_occupancy_weight > 0 else 0.0:.6f}"
+    )
+    print(
+        "optimal one-run value coverage:"
+        f" {optimal_one_run_value_weight / total_value_weight if total_value_weight > 0 else 0.0:.6f}"
+    )
+    print()
+    print("Existence tests among states with optimal one-run actions:")
+    print_rate("exists min-sum-gap block", lambda row: row.exists_min_sum_gap)
+    print_rate("exists min-max-gap block", lambda row: row.exists_min_max_gap)
+    print_rate("exists top-prefix block", lambda row: row.exists_top_prefix)
+    print_rate(
+        "exists prefix-plus-tail-anchor",
+        lambda row: row.exists_prefix_plus_tail_anchor,
+    )
+    print()
+    print_canonical_distribution(
+        "Canonical representative: smallest sum_gap",
+        lambda row: row.smallest_sum_signature,
+        lambda row: row.smallest_sum_stats,
+    )
+    print_canonical_distribution(
+        "Canonical representative: topmost start",
+        lambda row: row.topmost_signature,
+        lambda row: row.topmost_stats,
+    )
+    print_canonical_distribution(
+        "Canonical representative: longest block",
+        lambda row: row.longest_signature,
+        lambda row: row.longest_stats,
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Finite-horizon expert game experiments")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1318,6 +1585,13 @@ def _build_parser() -> argparse.ArgumentParser:
     one_run_analysis.add_argument("--occupancy-policy", default="comb")
     one_run_analysis.add_argument("-n", type=int, default=20)
 
+    one_run_tie_analysis_parser = subparsers.add_parser("one-run-tie-analysis")
+    one_run_tie_analysis_parser.add_argument("--k", type=int, required=True)
+    one_run_tie_analysis_parser.add_argument("--T", type=int, required=True)
+    one_run_tie_analysis_parser.add_argument("--occupancy-policy", default="comb")
+    one_run_tie_analysis_parser.add_argument("--tolerance", type=float, default=1e-9)
+    one_run_tie_analysis_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -1374,6 +1648,15 @@ def main() -> None:
             args.T,
             args.occupancy_policy,
             args.n,
+        )
+        return
+    if args.command == "one-run-tie-analysis":
+        print_one_run_tie_analysis(
+            args.k,
+            args.T,
+            args.occupancy_policy,
+            tolerance=args.tolerance,
+            n=args.n,
         )
         return
     raise ValueError(f"unknown command: {args.command}")

@@ -13,6 +13,7 @@ from expert_game_lab.experiments import (
     _local_edge_action_library,
     filter_weighted_greedy_contributions,
     library_oracle,
+    one_run_tie_analysis,
     occupation_weighted_greedy_defects,
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
@@ -141,6 +142,21 @@ def test_all_action_library_oracle_has_zero_restriction_loss() -> None:
 
     assert total_loss == pytest.approx(0.0)
     assert sum(item.loss for item in contributions) == pytest.approx(0.0)
+
+
+def test_one_run_tie_analysis_finds_optimal_one_run_rows() -> None:
+    rows, total_occupancy, total_value, one_run_occupancy, one_run_value = one_run_tie_analysis(
+        3,
+        4,
+        comb_policy,
+    )
+
+    assert rows
+    assert total_occupancy > 0.0
+    assert total_value > 0.0
+    assert 0.0 < one_run_occupancy <= total_occupancy
+    assert 0.0 < one_run_value <= total_value
+    assert all(row.optimal_one_run_count >= 1 for row in rows)
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:
