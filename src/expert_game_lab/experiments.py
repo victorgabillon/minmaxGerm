@@ -102,6 +102,34 @@ class LibraryOracleRegimeSummary:
     top_library_edge_signatures: tuple[tuple[str, float], ...]
 
 
+@dataclass(frozen=True)
+class BlockGapStats:
+    interval: tuple[int, int]
+    sum_gap: int
+    max_gap: int
+    length: int
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class OneRunOracleAnalysisRow:
+    time: int
+    remaining_horizon: int
+    state: tuple[int, ...]
+    packet_type: tuple[int, ...]
+    packet_gaps: tuple[int, ...]
+    occupancy_probability: float
+    unrestricted_action: tuple[int, ...]
+    unrestricted_score: float
+    edge_signature: tuple[int, ...]
+    block_stats: BlockGapStats
+    is_min_sum_gap: bool
+    is_min_max_gap: bool
+    is_top_prefix: bool
+    is_longest_min_sum_gap: bool
+
+
 def _format_action(action: tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in action)
 
@@ -134,6 +162,62 @@ def _edge_signature_run_count(sig: tuple[int, ...]) -> int:
         elif edge == 0:
             in_run = False
     return runs
+
+
+def _edge_run_intervals(sig: tuple[int, ...]) -> list[tuple[int, int]]:
+    intervals: list[tuple[int, int]] = []
+    start: int | None = None
+    for index, edge in enumerate(sig):
+        if edge == 1 and start is None:
+            start = index
+        elif edge == 0 and start is not None:
+            intervals.append((start, index - 1))
+            start = None
+    if start is not None:
+        intervals.append((start, len(sig) - 1))
+    return intervals
+
+
+def _is_one_run(sig: tuple[int, ...]) -> bool:
+    return len(_edge_run_intervals(sig)) == 1
+
+
+def _gap_vector(state: tuple[int, ...]) -> tuple[int, ...]:
+    return tuple(state[index] - state[index + 1] for index in range(len(state) - 1))
+
+
+def _all_edge_blocks(edge_count: int) -> tuple[tuple[int, int], ...]:
+    return tuple(
+        (start, end)
+        for start in range(edge_count)
+        for end in range(start, edge_count)
+    )
+
+
+def _block_gap_stats_from_interval(
+    gaps: tuple[int, ...],
+    interval: tuple[int, int],
+) -> BlockGapStats:
+    start, end = interval
+    block_gaps = gaps[start : end + 1]
+    return BlockGapStats(
+        interval=interval,
+        sum_gap=sum(block_gaps),
+        max_gap=max(block_gaps),
+        length=end - start + 1,
+        start=start,
+        end=end,
+    )
+
+
+def _block_gap_stats(
+    state: tuple[int, ...],
+    sig: tuple[int, ...],
+) -> BlockGapStats | None:
+    intervals = _edge_run_intervals(sig)
+    if len(intervals) != 1:
+        return None
+    return _block_gap_stats_from_interval(_gap_vector(state), intervals[0])
 
 
 def _local_edge_action_library(k: int) -> tuple[tuple[int, ...], ...]:
@@ -599,6 +683,89 @@ def summarize_library_oracle_by_regime(
     return summaries
 
 
+def one_run_oracle_analysis(
+    k: int,
+    T: int,
+    occupancy_policy_fn,
+) -> tuple[list[OneRunOracleAnalysisRow], float, float, float, float]:
+    occupancy = state_occupancy(k, T, occupancy_policy_fn)
+    optimal = optimal_values(k, T)
+    action_list = all_actions(k)
+    rows: list[OneRunOracleAnalysisRow] = []
+    total_occupancy_weight = 0.0
+    total_value_weight = 0.0
+    one_run_occupancy_weight = 0.0
+    one_run_value_weight = 0.0
+
+    for time in range(T):
+        remaining_horizon = T - time
+        continuation = optimal[remaining_horizon - 1]
+        for state, occupancy_probability in occupancy[time].items():
+            q_by_action = {
+                action: _next_state_value(state, action, continuation)
+                for action in action_list
+            }
+            solution = solve_minimax_step(q_by_action, k)
+            if not solution.success:
+                raise RuntimeError(f"LP failed at state {state}: {solution.message}")
+
+            def score(action: tuple[int, ...]) -> float:
+                return q_by_action[action] - sum(solution.p[index] * action[index] for index in range(k))
+
+            unrestricted_action = max(action_list, key=score)
+            unrestricted_score = score(unrestricted_action)
+            value_weight = occupancy_probability * unrestricted_score
+            total_occupancy_weight += occupancy_probability
+            total_value_weight += value_weight
+
+            sig = _edge_signature(unrestricted_action)
+            stats = _block_gap_stats(state, sig)
+            if stats is None:
+                continue
+
+            gaps = _gap_vector(state)
+            all_stats = tuple(
+                _block_gap_stats_from_interval(gaps, interval)
+                for interval in _all_edge_blocks(len(gaps))
+            )
+            min_sum_gap = min(item.sum_gap for item in all_stats)
+            min_max_gap = min(item.max_gap for item in all_stats)
+            longest_min_sum_length = max(
+                item.length for item in all_stats if item.sum_gap == min_sum_gap
+            )
+            one_run_occupancy_weight += occupancy_probability
+            one_run_value_weight += value_weight
+            rows.append(
+                OneRunOracleAnalysisRow(
+                    time=time,
+                    remaining_horizon=remaining_horizon,
+                    state=state,
+                    packet_type=packet_type(state),
+                    packet_gaps=_packet_gaps(state),
+                    occupancy_probability=occupancy_probability,
+                    unrestricted_action=unrestricted_action,
+                    unrestricted_score=unrestricted_score,
+                    edge_signature=sig,
+                    block_stats=stats,
+                    is_min_sum_gap=stats.sum_gap == min_sum_gap,
+                    is_min_max_gap=stats.max_gap == min_max_gap,
+                    is_top_prefix=stats.start == 0,
+                    is_longest_min_sum_gap=(
+                        stats.sum_gap == min_sum_gap
+                        and stats.length == longest_min_sum_length
+                    ),
+                )
+            )
+
+    return (
+        rows,
+        total_occupancy_weight,
+        total_value_weight,
+        one_run_occupancy_weight,
+        one_run_value_weight,
+    )
+
+
 def _policy_registry(k: int) -> dict[str, object]:
     policies: dict[str, object] = {
         "comb": comb_policy,
@@ -1000,6 +1167,86 @@ def print_library_oracle(
         print(f"  {action} edge={_format_edge_signature(_edge_signature(tuple(int(bit) for bit in action)))} value={value:.6f}")
 
 
+def print_one_run_oracle_analysis(
+    k: int,
+    T: int,
+    occupancy_policy_name: str,
+    n: int = 20,
+) -> None:
+    policies = _policy_registry(k)
+    if occupancy_policy_name not in policies:
+        raise ValueError(f"unknown occupancy policy: {occupancy_policy_name}")
+
+    (
+        rows,
+        total_occupancy_weight,
+        total_value_weight,
+        one_run_occupancy_weight,
+        one_run_value_weight,
+    ) = one_run_oracle_analysis(k, T, policies[occupancy_policy_name])
+
+    def occupancy_weight(row: OneRunOracleAnalysisRow) -> float:
+        return row.occupancy_probability
+
+    def value_weight(row: OneRunOracleAnalysisRow) -> float:
+        return row.occupancy_probability * row.unrestricted_score
+
+    def weighted_rate(predicate, weight_getter) -> float:
+        denominator = sum(weight_getter(row) for row in rows)
+        if denominator <= 0:
+            return 0.0
+        return sum(weight_getter(row) for row in rows if predicate(row)) / denominator
+
+    def print_rate(label: str, predicate) -> None:
+        print(
+            f"{label:28s}"
+            f" occupancy={100.0 * weighted_rate(predicate, occupancy_weight):8.3f}%"
+            f" value={100.0 * weighted_rate(predicate, value_weight):8.3f}%"
+        )
+
+    interval_totals: dict[tuple[int, int], float] = defaultdict(float)
+    length_totals: dict[int, float] = defaultdict(float)
+    signature_totals: dict[str, float] = defaultdict(float)
+    regime_non_min_sum: dict[tuple[tuple[int, ...], tuple[int, ...]], float] = defaultdict(float)
+    for row in rows:
+        weight = value_weight(row)
+        interval_totals[row.block_stats.interval] += weight
+        length_totals[row.block_stats.length] += weight
+        signature_totals[_format_edge_signature(row.edge_signature)] += weight
+        if not row.is_min_sum_gap:
+            regime_non_min_sum[(row.packet_type, row.packet_gaps)] += weight
+
+    print(f"One-run oracle analysis, k={k}, T={T}")
+    print()
+    print(f"occupancy policy: {occupancy_policy_name}")
+    print(f"visited rows: {sum(len(layer) for layer in state_occupancy(k, T, policies[occupancy_policy_name])[:-1])}")
+    print(f"one-run rows: {len(rows)}")
+    print(f"one-run occupancy coverage: {one_run_occupancy_weight / total_occupancy_weight if total_occupancy_weight > 0 else 0.0:.6f}")
+    print(f"one-run value coverage: {one_run_value_weight / total_value_weight if total_value_weight > 0 else 0.0:.6f}")
+    print()
+    print("Selected block tests among one-run unrestricted best actions:")
+    print_rate("min sum gap", lambda row: row.is_min_sum_gap)
+    print_rate("min max gap", lambda row: row.is_min_max_gap)
+    print_rate("top prefix", lambda row: row.is_top_prefix)
+    print_rate("longest min sum gap", lambda row: row.is_longest_min_sum_gap)
+    print()
+    print("Top selected intervals by value weight:")
+    for interval, weight in sorted(interval_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
+        print(f"  {interval}: {weight:.6f}")
+    print()
+    print("Top selected block lengths by value weight:")
+    for length, weight in sorted(length_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
+        print(f"  {length}: {weight:.6f}")
+    print()
+    print("Top selected edge signatures by value weight:")
+    for signature, weight in sorted(signature_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
+        print(f"  {signature}: {weight:.6f}")
+    print()
+    print("Top regimes where selected block is not min-sum by value weight:")
+    for (ptype, gaps), weight in sorted(regime_non_min_sum.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
+        print(f"  packet type={ptype} gaps={gaps}: {weight:.6f}")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Finite-horizon expert game experiments")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1065,6 +1312,12 @@ def _build_parser() -> argparse.ArgumentParser:
     library_oracle_parser.add_argument("--top-fixed-size", type=int, default=20)
     library_oracle_parser.add_argument("-n", type=int, default=20)
 
+    one_run_analysis = subparsers.add_parser("one-run-oracle-analysis")
+    one_run_analysis.add_argument("--k", type=int, required=True)
+    one_run_analysis.add_argument("--T", type=int, required=True)
+    one_run_analysis.add_argument("--occupancy-policy", default="comb")
+    one_run_analysis.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -1113,6 +1366,14 @@ def main() -> None:
             args.occupancy_policy,
             top_fixed_size=args.top_fixed_size,
             n=args.n,
+        )
+        return
+    if args.command == "one-run-oracle-analysis":
+        print_one_run_oracle_analysis(
+            args.k,
+            args.T,
+            args.occupancy_policy,
+            args.n,
         )
         return
     raise ValueError(f"unknown command: {args.command}")

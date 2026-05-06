@@ -2,7 +2,11 @@ import pytest
 
 from expert_game_lab.dp_policy import state_occupancy
 from expert_game_lab.experiments import (
+    _block_gap_stats,
     _edge_signature,
+    _edge_run_intervals,
+    _gap_vector,
+    _is_one_run,
     _one_run_edge_action_library,
     _prefix_one_run_action_library,
     _prefix_plus_tail_anchor_action_library,
@@ -25,6 +29,25 @@ from expert_game_lab.policies import comb_policy, packet_minimal_frontier_policy
 )
 def test_edge_signature(action: tuple[int, ...], expected: tuple[int, ...]) -> None:
     assert _edge_signature(action) == expected
+
+
+def test_edge_run_intervals_and_one_run_predicate() -> None:
+    assert _edge_run_intervals((0, 1, 1, 0, 1)) == [(1, 2), (4, 4)]
+    assert _edge_run_intervals((1, 1, 1, 0)) == [(0, 2)]
+    assert _is_one_run((1, 1, 1, 0))
+    assert not _is_one_run((0, 1, 1, 0, 1))
+
+
+def test_block_gap_stats_for_one_run_signature() -> None:
+    stats = _block_gap_stats((5, 4, 4, 2, 0), (1, 1, 0, 0))
+
+    assert _gap_vector((5, 4, 4, 2, 0)) == (1, 0, 2, 2)
+    assert stats is not None
+    assert stats.interval == (0, 1)
+    assert stats.sum_gap == 1
+    assert stats.max_gap == 1
+    assert stats.length == 2
+    assert _block_gap_stats((5, 4, 4, 2, 0), (1, 0, 1, 0)) is None
 
 
 def test_local_edge_action_library_contains_expected_motifs() -> None:
