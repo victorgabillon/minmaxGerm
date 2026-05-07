@@ -11,6 +11,7 @@ from expert_game_lab.experiments import (
     _prefix_one_run_action_library,
     _prefix_plus_tail_anchor_action_library,
     _local_edge_action_library,
+    evaluate_top_prefix_oracle,
     filter_weighted_greedy_contributions,
     library_oracle,
     one_run_tie_analysis,
@@ -176,6 +177,16 @@ def test_top_prefix_tie_analysis_finds_optimal_lengths() -> None:
         assert row.optimal_lengths
         assert row.min_optimal_length == min(row.optimal_lengths)
         assert row.max_optimal_length == max(row.optimal_lengths)
+
+
+def test_top_prefix_oracle_eval_runs_for_all_selectors() -> None:
+    for selector in ("min_valid", "max_valid", "median_valid", "chase_preferred"):
+        result = evaluate_top_prefix_oracle(3, 4, selector)
+
+        assert result.selector == selector
+        assert result.value <= result.optimal_value + 1e-9
+        assert result.gap >= -1e-9
+        assert result.selected_length_counts
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:

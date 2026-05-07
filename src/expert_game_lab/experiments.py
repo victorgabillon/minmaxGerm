@@ -173,6 +173,17 @@ class TopPrefixTieAnalysisRow:
     max_optimal_length: int
 
 
+@dataclass(frozen=True)
+class TopPrefixOracleEvalResult:
+    selector: str
+    value: float
+    optimal_value: float
+    gap: float
+    normalized_gap: float
+    selected_length_counts: tuple[tuple[int, int], ...]
+    fallback_count: int
+
+
 def _format_action(action: tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in action)
 
@@ -278,6 +289,11 @@ def _top_prefix_signature(k: int, length: int) -> tuple[int, ...]:
 
 def _top_prefix_action(k: int, length: int) -> tuple[int, ...]:
     return _action_from_edge_signature(_top_prefix_signature(k, length))
+
+
+def _balanced_top_prefix_policy(k: int, length: int) -> tuple[tuple[float, tuple[int, ...]], ...]:
+    action = _top_prefix_action(k, length)
+    return ((0.5, action), (0.5, complement(action)))
 
 
 def _local_edge_action_library(k: int) -> tuple[tuple[int, ...], ...]:
@@ -1028,6 +1044,125 @@ def top_prefix_tie_analysis(
     )
 
 
+def _optimal_top_prefix_lengths(
+    k: int,
+    state: tuple[int, ...],
+    continuation: dict[tuple[int, ...], float],
+    tolerance: float,
+) -> tuple[tuple[int, ...], bool]:
+    if k < 2:
+        return (), False
+
+    action_list = all_actions(k)
+    q_by_action = {
+        action: _next_state_value(state, action, continuation)
+        for action in action_list
+    }
+    solution = solve_minimax_step(q_by_action, k)
+    if not solution.success:
+        raise RuntimeError(f"LP failed at state {state}: {solution.message}")
+
+    def score(action: tuple[int, ...]) -> float:
+        return q_by_action[action] - sum(solution.p[index] * action[index] for index in range(k))
+
+    unrestricted_best_score = max(score(action) for action in action_list)
+    length_scores = tuple(
+        (
+            length,
+            max(score(_top_prefix_action(k, length)), score(complement(_top_prefix_action(k, length)))),
+        )
+        for length in range(1, k)
+    )
+    valid_lengths = tuple(
+        length
+        for length, length_score in length_scores
+        if length_score >= unrestricted_best_score - tolerance
+    )
+    if valid_lengths:
+        return valid_lengths, False
+
+    best_top_prefix_score = max(length_score for _, length_score in length_scores)
+    fallback_lengths = tuple(
+        length
+        for length, length_score in length_scores
+        if length_score >= best_top_prefix_score - tolerance
+    )
+    return fallback_lengths, True
+
+
+def _select_top_prefix_length(lengths: tuple[int, ...], selector: str) -> int:
+    if not lengths:
+        raise ValueError("cannot select from an empty length set")
+    ordered = tuple(sorted(lengths))
+    if selector == "min_valid":
+        return ordered[0]
+    if selector == "max_valid":
+        return ordered[-1]
+    if selector == "median_valid":
+        return ordered[(len(ordered) - 1) // 2]
+    if selector == "chase_preferred":
+        target = 3
+        return min(ordered, key=lambda length: (abs(length - target), length))
+    raise ValueError(f"unknown top-prefix oracle selector: {selector}")
+
+
+def evaluate_top_prefix_oracle(
+    k: int,
+    T: int,
+    selector: str,
+    tolerance: float = 1e-9,
+) -> TopPrefixOracleEvalResult:
+    if T < 0:
+        raise ValueError("T must be nonnegative")
+    if k < 2:
+        raise ValueError("k must be at least 2 for top-prefix oracle evaluation")
+
+    zero = tuple(0 for _ in range(k))
+    optimal = optimal_values(k, T)
+    state_layers = [tuple(all_states(k, used)) for used in range(T + 1)]
+    values: list[dict[tuple[int, ...], float]] = [
+        {state: float(max(state, default=0)) for state in state_layers[T]}
+    ]
+    selected_length_counts: dict[int, int] = defaultdict(int)
+    fallback_count = 0
+
+    for horizon in range(1, T + 1):
+        policy_continuation = values[horizon - 1]
+        optimal_continuation = optimal[horizon - 1]
+        current: dict[tuple[int, ...], float] = {}
+        for state in state_layers[T - horizon]:
+            valid_lengths, used_fallback = _optimal_top_prefix_lengths(
+                k,
+                state,
+                optimal_continuation,
+                tolerance,
+            )
+            length = _select_top_prefix_length(valid_lengths, selector)
+            selected_length_counts[length] += 1
+            if used_fallback:
+                fallback_count += 1
+
+            expected_value = 0.0
+            for probability, action in _balanced_top_prefix_policy(k, length):
+                expected_value += probability * _next_state_value(state, action, policy_continuation)
+            current[state] = expected_value - 0.5
+        values.append(current)
+
+    value = values[T][zero]
+    optimal_value = optimal[T][zero]
+    gap = optimal_value - value
+    normalized_gap = gap / (T ** 0.5 if T > 0 else 1.0)
+    return TopPrefixOracleEvalResult(
+        selector=selector,
+        value=value,
+        optimal_value=optimal_value,
+        gap=gap,
+        normalized_gap=normalized_gap,
+        selected_length_counts=tuple(sorted(selected_length_counts.items())),
+        fallback_count=fallback_count,
+    )
+
+
 def _policy_registry(k: int) -> dict[str, object]:
     policies: dict[str, object] = {
         "comb": comb_policy,
@@ -1712,6 +1847,28 @@ def print_top_prefix_tie_analysis(
         )
 
 
+def print_top_prefix_oracle_eval(
+    k: int,
+    T: int,
+    selector: str,
+    tolerance: float = 1e-9,
+) -> None:
+    result = evaluate_top_prefix_oracle(k, T, selector, tolerance=tolerance)
+    print(f"Top-prefix oracle eval, k={k}, T={T}")
+    print()
+    print(f"selector: {selector}")
+    print(f"tolerance: {tolerance:.3g}")
+    print(f"V_star: {result.optimal_value:.6f}")
+    print(f"V_policy: {result.value:.6f}")
+    print(f"gap: {result.gap:.6f}")
+    print(f"gap/sqrt(T): {result.normalized_gap:.6f}")
+    print(f"fallback states: {result.fallback_count}")
+    print()
+    print("Selected L counts across DP states:")
+    for length, count in result.selected_length_counts:
+        print(f"  {length}: {count}")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Finite-horizon expert game experiments")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1797,6 +1954,16 @@ def _build_parser() -> argparse.ArgumentParser:
     top_prefix_tie_analysis_parser.add_argument("--tolerance", type=float, default=1e-9)
     top_prefix_tie_analysis_parser.add_argument("-n", type=int, default=20)
 
+    top_prefix_oracle_eval_parser = subparsers.add_parser("top-prefix-oracle-eval")
+    top_prefix_oracle_eval_parser.add_argument("--k", type=int, required=True)
+    top_prefix_oracle_eval_parser.add_argument("--T", type=int, required=True)
+    top_prefix_oracle_eval_parser.add_argument(
+        "--selector",
+        choices=("min_valid", "max_valid", "median_valid", "chase_preferred"),
+        required=True,
+    )
+    top_prefix_oracle_eval_parser.add_argument("--tolerance", type=float, default=1e-9)
+
     return parser
 
 
@@ -1871,6 +2038,14 @@ def main() -> None:
             args.occupancy_policy,
             tolerance=args.tolerance,
             n=args.n,
+        )
+        return
+    if args.command == "top-prefix-oracle-eval":
+        print_top_prefix_oracle_eval(
+            args.k,
+            args.T,
+            args.selector,
+            tolerance=args.tolerance,
         )
         return
     raise ValueError(f"unknown command: {args.command}")
