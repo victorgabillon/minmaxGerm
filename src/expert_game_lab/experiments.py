@@ -184,6 +184,18 @@ class TopPrefixOracleEvalResult:
     fallback_count: int
 
 
+@dataclass(frozen=True)
+class TopPrefixOracleLabelRow:
+    horizon: int
+    state: tuple[int, ...]
+    packet_type: tuple[int, ...]
+    packet_gaps: tuple[int, ...]
+    adjacent_gaps: tuple[int, ...]
+    valid_lengths: tuple[int, ...]
+    selected_length: int
+    used_fallback: bool
+
+
 def _format_action(action: tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in action)
 
@@ -1163,6 +1175,44 @@ def evaluate_top_prefix_oracle(
     )
 
 
+def top_prefix_oracle_labels(
+    k: int,
+    T: int,
+    selector: str,
+    tolerance: float = 1e-9,
+) -> list[TopPrefixOracleLabelRow]:
+    if T < 0:
+        raise ValueError("T must be nonnegative")
+    if k < 2:
+        raise ValueError("k must be at least 2 for top-prefix oracle labels")
+
+    optimal = optimal_values(k, T)
+    rows: list[TopPrefixOracleLabelRow] = []
+    for horizon in range(1, T + 1):
+        continuation = optimal[horizon - 1]
+        for state in all_states(k, T - horizon):
+            valid_lengths, used_fallback = _optimal_top_prefix_lengths(
+                k,
+                state,
+                continuation,
+                tolerance,
+            )
+            selected_length = _select_top_prefix_length(valid_lengths, selector)
+            rows.append(
+                TopPrefixOracleLabelRow(
+                    horizon=horizon,
+                    state=state,
+                    packet_type=packet_type(state),
+                    packet_gaps=_packet_gaps(state),
+                    adjacent_gaps=_gap_vector(state),
+                    valid_lengths=valid_lengths,
+                    selected_length=selected_length,
+                    used_fallback=used_fallback,
+                )
+            )
+    return rows
+
+
 def _policy_registry(k: int) -> dict[str, object]:
     policies: dict[str, object] = {
         "comb": comb_policy,
@@ -1869,6 +1919,77 @@ def print_top_prefix_oracle_eval(
         print(f"  {length}: {count}")
 
 
+def print_top_prefix_oracle_labels(
+    k: int,
+    T: int,
+    selector: str,
+    tolerance: float = 1e-9,
+    n: int = 20,
+) -> None:
+    rows = top_prefix_oracle_labels(k, T, selector, tolerance=tolerance)
+
+    regime_rows: dict[tuple[tuple[int, ...], tuple[int, ...]], list[TopPrefixOracleLabelRow]] = defaultdict(list)
+    selected_totals: dict[int, int] = defaultdict(int)
+    valid_set_totals: dict[tuple[int, ...], int] = defaultdict(int)
+    fallback_count = 0
+    for row in rows:
+        regime_rows[(row.packet_type, row.packet_gaps)].append(row)
+        selected_totals[row.selected_length] += 1
+        valid_set_totals[row.valid_lengths] += 1
+        if row.used_fallback:
+            fallback_count += 1
+
+    print(f"Top-prefix oracle labels, k={k}, T={T}")
+    print()
+    print(f"selector: {selector}")
+    print(f"tolerance: {tolerance:.3g}")
+    print(f"rows: {len(rows)}")
+    print(f"fallback rows: {fallback_count}")
+    print()
+    print("Selected L histogram:")
+    for length, count in sorted(selected_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
+        print(f"  {length}: {count}")
+    print()
+    print("Valid L set histogram:")
+    for lengths, count in sorted(valid_set_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
+        print(f"  {lengths}: {count}")
+    print()
+    print("Top regimes by DP-state count:")
+    for (ptype, gaps), items in sorted(regime_rows.items(), key=lambda pair: (-len(pair[1]), pair[0]))[:n]:
+        selected_hist: dict[int, int] = defaultdict(int)
+        valid_hist: dict[tuple[int, ...], int] = defaultdict(int)
+        regime_fallback_count = 0
+        for item in items:
+            selected_hist[item.selected_length] += 1
+            valid_hist[item.valid_lengths] += 1
+            if item.used_fallback:
+                regime_fallback_count += 1
+        rendered_selected = ", ".join(
+            f"{length}:{count}"
+            for length, count in sorted(selected_hist.items(), key=lambda pair: (-pair[1], pair[0]))[:5]
+        )
+        rendered_valid = ", ".join(
+            f"{lengths}:{count}"
+            for lengths, count in sorted(valid_hist.items(), key=lambda pair: (-pair[1], pair[0]))[:5]
+        )
+        print(
+            f"  packet type={ptype} gaps={gaps} count={len(items)}"
+            f" fallback={regime_fallback_count}"
+            f" selected=[{rendered_selected}]"
+            f" valid=[{rendered_valid}]"
+        )
+    print()
+    print("Raw rows with largest horizons:")
+    for row in sorted(rows, key=lambda item: (-item.horizon, item.state))[:n]:
+        marker = " fallback" if row.used_fallback else ""
+        print(
+            f"  horizon={row.horizon:2d} state={row.state}"
+            f" ptype={row.packet_type} packet_gaps={row.packet_gaps}"
+            f" adjacent_gaps={row.adjacent_gaps}"
+            f" valid={row.valid_lengths} selected={row.selected_length}{marker}"
+        )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Finite-horizon expert game experiments")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1964,6 +2085,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     top_prefix_oracle_eval_parser.add_argument("--tolerance", type=float, default=1e-9)
 
+    top_prefix_oracle_labels_parser = subparsers.add_parser("top-prefix-oracle-labels")
+    top_prefix_oracle_labels_parser.add_argument("--k", type=int, required=True)
+    top_prefix_oracle_labels_parser.add_argument("--T", type=int, required=True)
+    top_prefix_oracle_labels_parser.add_argument(
+        "--selector",
+        choices=("min_valid", "max_valid", "median_valid", "chase_preferred"),
+        required=True,
+    )
+    top_prefix_oracle_labels_parser.add_argument("--tolerance", type=float, default=1e-9)
+    top_prefix_oracle_labels_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -2046,6 +2178,15 @@ def main() -> None:
             args.T,
             args.selector,
             tolerance=args.tolerance,
+        )
+        return
+    if args.command == "top-prefix-oracle-labels":
+        print_top_prefix_oracle_labels(
+            args.k,
+            args.T,
+            args.selector,
+            tolerance=args.tolerance,
+            n=args.n,
         )
         return
     raise ValueError(f"unknown command: {args.command}")

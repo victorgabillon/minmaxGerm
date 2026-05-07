@@ -18,6 +18,7 @@ from expert_game_lab.experiments import (
     occupation_weighted_greedy_defects,
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
+    top_prefix_oracle_labels,
     top_prefix_tie_analysis,
 )
 from expert_game_lab.policies import comb_policy, packet_minimal_frontier_policy
@@ -187,6 +188,14 @@ def test_top_prefix_oracle_eval_runs_for_all_selectors() -> None:
         assert result.value <= result.optimal_value + 1e-9
         assert result.gap >= -1e-9
         assert result.selected_length_counts
+
+
+def test_top_prefix_oracle_labels_runs() -> None:
+    rows = top_prefix_oracle_labels(3, 4, "min_valid")
+
+    assert rows
+    assert all(row.valid_lengths for row in rows)
+    assert all(row.selected_length in row.valid_lengths for row in rows)
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:
