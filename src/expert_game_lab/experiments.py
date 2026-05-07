@@ -28,6 +28,7 @@ from .policies import (
     top_prefix_three_regime_v2_policy,
     top_prefix_three_regime_v3_policy,
     top_prefix_three_regime_v4_policy,
+    top_prefix_three_regime_v5_policy,
     top_prefix_tie_mimic_policy,
 )
 from .state import all_states, canon, packet_type
@@ -1343,6 +1344,7 @@ def _policy_registry(k: int) -> dict[str, object]:
         "top_prefix_three_regime_v2": top_prefix_three_regime_v2_policy,
         "top_prefix_three_regime_v3": top_prefix_three_regime_v3_policy,
         "top_prefix_three_regime_v4": top_prefix_three_regime_v4_policy,
+        "top_prefix_three_regime_v5": top_prefix_three_regime_v5_policy,
         "top_prefix_tie_mimic": top_prefix_tie_mimic_policy,
     }
     if k == 5:

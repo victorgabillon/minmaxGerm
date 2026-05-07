@@ -273,6 +273,54 @@ def top_prefix_three_regime_v4_policy(x: tuple[int, ...]) -> Policy:
     return _top_prefix_policy_with_length(state, length)
 
 
+def top_prefix_three_regime_v5_policy(x: tuple[int, ...]) -> Policy:
+    state = canon(x)
+    k = len(state)
+    if k <= 1:
+        return _top_prefix_policy_with_length(state, 0)
+
+    largest_odd = _largest_odd_top_prefix_length(k)
+    broad_length = min(5, largest_odd)
+    gaps = tuple(state[index] - state[index + 1] for index in range(k - 1))
+    packet_sizes = tuple(len(packet) for packet in packets(state))
+    narrow_frontier_prefixes = {
+        (1, 2, 2),
+        (1, 2, 2, 1),
+        (1, 2, 3, 1),
+        (1, 3, 2, 1),
+    }
+    broad_packet_prefixes = {
+        (2, 2, 3),
+        (2, 3, 2),
+        (3, 2, 2),
+    }
+
+    if all(gap == 0 for gap in gaps):
+        length = largest_odd
+    elif any(packet_sizes[: len(pattern)] == pattern for pattern in narrow_frontier_prefixes):
+        length = min(3, largest_odd)
+    elif len(packet_sizes) >= 3 and packet_sizes[0] == 1 and packet_sizes[1] == 2 and packet_sizes[2] >= 3:
+        length = min(3, largest_odd)
+    elif len(packet_sizes) >= 3 and packet_sizes[0] == 1 and packet_sizes[1] >= 4 and packet_sizes[2] >= 2:
+        length = min(3, largest_odd)
+    elif packet_sizes == (1, k - 1) and gaps[0] >= 2:
+        length = 1
+    elif any(size >= (k + 1) // 2 for size in packet_sizes):
+        length = broad_length
+    elif len(packet_sizes) >= 2 and packet_sizes[0] + packet_sizes[1] >= k - 1:
+        length = broad_length
+    elif any(packet_sizes[: len(pattern)] == pattern for pattern in broad_packet_prefixes):
+        length = broad_length
+    elif len(packet_sizes) >= 3 and packet_sizes[0] == 1 and packet_sizes[1] >= k - 2:
+        length = broad_length
+    elif gaps[0] >= 2:
+        length = 1
+    else:
+        length = min(3, largest_odd)
+
+    return _top_prefix_policy_with_length(state, length)
+
+
 def packet_frontier_policy(x: tuple[int, ...]) -> Policy:
     state = canon(x)
     if not state:

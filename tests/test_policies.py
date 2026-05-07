@@ -16,6 +16,7 @@ from expert_game_lab.policies import (
     top_prefix_three_regime_v2_policy,
     top_prefix_three_regime_v3_policy,
     top_prefix_three_regime_v4_policy,
+    top_prefix_three_regime_v5_policy,
     top_prefix_tie_mimic_policy,
 )
 
@@ -236,6 +237,28 @@ def test_top_prefix_three_regime_v4_policy_refines_large_tail_frontier(
     expected_support: set[tuple[int, ...]],
 ) -> None:
     policy = top_prefix_three_regime_v4_policy(state)
+
+    assert {action for _, action in policy} == expected_support
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_support"),
+    [
+        ((0, 0, 0, 0, 0, 0, 0, 0), {(1, 0, 1, 0, 1, 0, 1, 0), (0, 1, 0, 1, 0, 1, 0, 1)}),
+        ((2, 2, 2, 1, 1, 1, 1, 0), {(1, 0, 1, 0, 1, 0, 0, 0), (0, 1, 0, 1, 0, 1, 1, 1)}),
+        ((2, 1, 1, 1, 1, 0, 0, 0), {(1, 0, 1, 0, 0, 0, 0, 0), (0, 1, 0, 1, 1, 1, 1, 1)}),
+        ((1, 1, 0, 0, 0, 0, 0), {(1, 0, 1, 0, 1, 0, 0), (0, 1, 0, 1, 0, 1, 1)}),
+        ((1, 1, 1, 0, 0, 0, 0), {(1, 0, 1, 0, 1, 0, 0), (0, 1, 0, 1, 0, 1, 1)}),
+        ((1, 1, 1, 1, 0, 0, 0), {(1, 0, 1, 0, 1, 0, 0), (0, 1, 0, 1, 0, 1, 1)}),
+        ((2, 2, 1, 1, 0, 0, 0), {(1, 0, 1, 0, 1, 0, 0), (0, 1, 0, 1, 0, 1, 1)}),
+        ((2, 1, 1, 1, 1, 1, 0), {(1, 0, 1, 0, 1, 0, 0), (0, 1, 0, 1, 0, 1, 1)}),
+    ],
+)
+def test_top_prefix_three_regime_v5_policy_caps_broad_nonflat_prefix(
+    state: tuple[int, ...],
+    expected_support: set[tuple[int, ...]],
+) -> None:
+    policy = top_prefix_three_regime_v5_policy(state)
 
     assert {action for _, action in policy} == expected_support
 
