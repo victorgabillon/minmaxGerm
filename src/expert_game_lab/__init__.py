@@ -17,6 +17,7 @@ from .policies import (
     top_prefix_gap_sum_short_policy,
     top_prefix_longest_policy,
     top_prefix_shortest_policy,
+    top_prefix_three_regime_policy,
     top_prefix_tie_mimic_policy,
 )
 from .state import all_states, canon, packets
@@ -52,5 +53,6 @@ __all__ = [
     "top_prefix_gap_sum_short_policy",
     "top_prefix_longest_policy",
     "top_prefix_shortest_policy",
+    "top_prefix_three_regime_policy",
     "top_prefix_tie_mimic_policy",
 ]

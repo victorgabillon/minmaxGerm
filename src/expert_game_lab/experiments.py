@@ -24,6 +24,7 @@ from .policies import (
     top_prefix_gap_sum_short_policy,
     top_prefix_longest_policy,
     top_prefix_shortest_policy,
+    top_prefix_three_regime_policy,
     top_prefix_tie_mimic_policy,
 )
 from .state import all_states, canon, packet_type
@@ -1335,6 +1336,7 @@ def _policy_registry(k: int) -> dict[str, object]:
         "top_prefix_gap_sum_short": top_prefix_gap_sum_short_policy,
         "top_prefix_longest": top_prefix_longest_policy,
         "top_prefix_shortest": top_prefix_shortest_policy,
+        "top_prefix_three_regime": top_prefix_three_regime_policy,
         "top_prefix_tie_mimic": top_prefix_tie_mimic_policy,
     }
     if k == 5:
@@ -2208,6 +2210,108 @@ def print_top_prefix_oracle_labels_weighted(
         )
 
 
+def print_top_prefix_length_regimes(
+    k: int,
+    T: int,
+    selector: str,
+    occupancy_policy_name: str | None = "oracle",
+    tolerance: float = 1e-9,
+    n: int = 20,
+) -> None:
+    rows = weighted_top_prefix_oracle_labels(
+        k,
+        T,
+        selector,
+        occupancy_policy_name=occupancy_policy_name,
+        tolerance=tolerance,
+    )
+
+    print(f"Top-prefix selected-L regimes, k={k}, T={T}")
+    print()
+    print(f"selector: {selector}")
+    print(f"occupancy policy: {occupancy_policy_name or 'oracle'}")
+    print(f"tolerance: {tolerance:.3g}")
+    print(f"rows: {len(rows)}")
+    print()
+    print("Selected L summary by value weight:")
+    for length, weight in _top_weighted_histogram(rows, lambda row: row.selected_length, lambda row: row.value_weight, n):
+        occupancy_mass = sum(row.occupancy_probability for row in rows if row.selected_length == length)
+        print(f"  L={length}: occupancy={occupancy_mass:.6f} value={weight:.6f}")
+    print()
+    print("Valid L set -> selected L by value weight:")
+    valid_groups: dict[tuple[int, ...], list[WeightedTopPrefixOracleLabelRow]] = defaultdict(list)
+    for row in rows:
+        valid_groups[row.valid_lengths].append(row)
+    for lengths, items in sorted(valid_groups.items(), key=lambda pair: (-sum(row.value_weight for row in pair[1]), pair[0]))[:n]:
+        selected_hist = _top_weighted_histogram(
+            items,
+            lambda row: row.selected_length,
+            lambda row: row.value_weight,
+            n,
+        )
+        rendered_selected = ", ".join(f"{length}:{weight:.6f}" for length, weight in selected_hist)
+        print(f"  {lengths}: [{rendered_selected}]")
+
+    selected_groups: dict[int, list[WeightedTopPrefixOracleLabelRow]] = defaultdict(list)
+    for row in rows:
+        selected_groups[row.selected_length].append(row)
+
+    for length, items in sorted(selected_groups.items()):
+        occupancy_mass = sum(row.occupancy_probability for row in items)
+        value_weight = sum(row.value_weight for row in items)
+        print()
+        print(f"Selected L={length}")
+        print(f"  occupancy mass: {occupancy_mass:.6f}")
+        print(f"  value weight: {value_weight:.6f}")
+
+        regime_rows: dict[tuple[tuple[int, ...], tuple[int, ...]], list[WeightedTopPrefixOracleLabelRow]] = defaultdict(list)
+        for row in items:
+            regime_rows[(row.packet_type, row.packet_gaps)].append(row)
+
+        print("  top regimes by value:")
+        for (ptype, gaps), regime_items in sorted(
+            regime_rows.items(),
+            key=lambda pair: (-sum(row.value_weight for row in pair[1]), pair[0]),
+        )[:n]:
+            regime_occupancy = sum(row.occupancy_probability for row in regime_items)
+            regime_value = sum(row.value_weight for row in regime_items)
+            valid_hist = _top_weighted_histogram(
+                regime_items,
+                lambda row: row.valid_lengths,
+                lambda row: row.value_weight,
+                5,
+            )
+            adjacent_examples = tuple(
+                key
+                for key, _ in _top_weighted_histogram(
+                    regime_items,
+                    lambda row: row.adjacent_gaps,
+                    lambda row: row.value_weight,
+                    3,
+                )
+            )
+            rendered_valid = ", ".join(f"{lengths}:{weight:.6f}" for lengths, weight in valid_hist)
+            print(
+                f"    packet type={ptype} gaps={gaps}"
+                f" occupancy={regime_occupancy:.6f}"
+                f" value={regime_value:.6f}"
+                f" adjacent_examples={adjacent_examples}"
+                f" valid=[{rendered_valid}]"
+            )
+
+        print("  raw top rows:")
+        for row in sorted(items, key=lambda item: item.value_weight, reverse=True)[:n]:
+            marker = " fallback" if row.used_fallback else ""
+            print(
+                f"    t={row.time:2d} rem={row.remaining_horizon:2d}"
+                f" state={row.state} ptype={row.packet_type}"
+                f" packet_gaps={row.packet_gaps} adjacent_gaps={row.adjacent_gaps}"
+                f" prob={row.occupancy_probability:.6f}"
+                f" value_weight={row.value_weight:.6f}"
+                f" valid={row.valid_lengths}{marker}"
+            )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Finite-horizon expert game experiments")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2326,6 +2430,18 @@ def _build_parser() -> argparse.ArgumentParser:
     top_prefix_oracle_labels_weighted_parser.add_argument("--tolerance", type=float, default=1e-9)
     top_prefix_oracle_labels_weighted_parser.add_argument("-n", type=int, default=20)
 
+    top_prefix_length_regimes_parser = subparsers.add_parser("top-prefix-length-regimes")
+    top_prefix_length_regimes_parser.add_argument("--k", type=int, required=True)
+    top_prefix_length_regimes_parser.add_argument("--T", type=int, required=True)
+    top_prefix_length_regimes_parser.add_argument(
+        "--selector",
+        choices=("min_valid", "max_valid", "median_valid", "chase_preferred"),
+        required=True,
+    )
+    top_prefix_length_regimes_parser.add_argument("--occupancy-policy", default="oracle")
+    top_prefix_length_regimes_parser.add_argument("--tolerance", type=float, default=1e-9)
+    top_prefix_length_regimes_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -2421,6 +2537,16 @@ def main() -> None:
         return
     if args.command == "top-prefix-oracle-labels-weighted":
         print_top_prefix_oracle_labels_weighted(
+            args.k,
+            args.T,
+            args.selector,
+            occupancy_policy_name=args.occupancy_policy,
+            tolerance=args.tolerance,
+            n=args.n,
+        )
+        return
+    if args.command == "top-prefix-length-regimes":
+        print_top_prefix_length_regimes(
             args.k,
             args.T,
             args.selector,

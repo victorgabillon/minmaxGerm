@@ -118,6 +118,38 @@ def top_prefix_tie_mimic_policy(x: tuple[int, ...]) -> Policy:
     )
 
 
+def _largest_odd_top_prefix_length(k: int) -> int:
+    max_length = max(k - 1, 0)
+    if max_length % 2 == 1:
+        return max_length
+    return max(max_length - 1, 0)
+
+
+def top_prefix_three_regime_policy(x: tuple[int, ...]) -> Policy:
+    state = canon(x)
+    k = len(state)
+    if k <= 1:
+        return _top_prefix_policy_with_length(state, 0)
+
+    largest_odd = _largest_odd_top_prefix_length(k)
+    gaps = tuple(state[index] - state[index + 1] for index in range(k - 1))
+    state_packets = packets(state)
+
+    if all(gap == 0 for gap in gaps):
+        length = largest_odd
+    elif gaps[0] >= 2:
+        length = 1
+    elif (
+        len(state_packets[0]) >= (k + 1) // 2
+        or sum(1 for packet in state_packets if len(packet) >= 2) >= 2
+    ):
+        length = largest_odd
+    else:
+        length = min(3, largest_odd)
+
+    return _top_prefix_policy_with_length(state, length)
+
+
 def packet_frontier_policy(x: tuple[int, ...]) -> Policy:
     state = canon(x)
     if not state:

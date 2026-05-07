@@ -18,6 +18,7 @@ from expert_game_lab.experiments import (
     occupation_weighted_greedy_defects,
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
+    print_top_prefix_length_regimes,
     top_prefix_oracle_labels,
     top_prefix_tie_analysis,
     weighted_top_prefix_oracle_labels,
@@ -207,6 +208,13 @@ def test_weighted_top_prefix_oracle_labels_runs_for_all_selectors() -> None:
         assert sum(row.occupancy_probability for row in rows) == pytest.approx(4.0)
         assert all(row.valid_lengths for row in rows)
         assert all(row.selected_length in row.valid_lengths for row in rows)
+
+
+def test_top_prefix_length_regimes_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_top_prefix_length_regimes(3, 4, "min_valid", n=2)
+
+    captured = capsys.readouterr()
+    assert "Selected L=1" in captured.out
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:
