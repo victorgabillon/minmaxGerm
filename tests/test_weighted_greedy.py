@@ -17,6 +17,7 @@ from expert_game_lab.experiments import (
     occupation_weighted_greedy_defects,
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
+    top_prefix_tie_analysis,
 )
 from expert_game_lab.policies import comb_policy, packet_minimal_frontier_policy
 
@@ -157,6 +158,24 @@ def test_one_run_tie_analysis_finds_optimal_one_run_rows() -> None:
     assert 0.0 < one_run_occupancy <= total_occupancy
     assert 0.0 < one_run_value <= total_value
     assert all(row.optimal_one_run_count >= 1 for row in rows)
+
+
+def test_top_prefix_tie_analysis_finds_optimal_lengths() -> None:
+    rows, total_occupancy, total_value, prefix_occupancy, prefix_value = top_prefix_tie_analysis(
+        3,
+        4,
+        comb_policy,
+    )
+
+    assert rows
+    assert total_occupancy > 0.0
+    assert total_value > 0.0
+    assert 0.0 < prefix_occupancy <= total_occupancy
+    assert 0.0 < prefix_value <= total_value
+    for row in rows:
+        assert row.optimal_lengths
+        assert row.min_optimal_length == min(row.optimal_lengths)
+        assert row.max_optimal_length == max(row.optimal_lengths)
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:

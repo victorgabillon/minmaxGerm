@@ -158,6 +158,21 @@ class OneRunTieAnalysisRow:
     longest_stats: BlockGapStats
 
 
+@dataclass(frozen=True)
+class TopPrefixTieAnalysisRow:
+    time: int
+    remaining_horizon: int
+    state: tuple[int, ...]
+    packet_type: tuple[int, ...]
+    packet_gaps: tuple[int, ...]
+    adjacent_gaps: tuple[int, ...]
+    occupancy_probability: float
+    unrestricted_best_score: float
+    optimal_lengths: tuple[int, ...]
+    min_optimal_length: int
+    max_optimal_length: int
+
+
 def _format_action(action: tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in action)
 
@@ -253,6 +268,16 @@ def _prefix_plus_tail_anchor_signatures(k: int) -> set[tuple[int, ...]]:
         _edge_signature(action)
         for action in _prefix_plus_tail_anchor_action_library(k)
     }
+
+
+def _top_prefix_signature(k: int, length: int) -> tuple[int, ...]:
+    if length < 1 or length > max(k - 1, 0):
+        raise ValueError("top-prefix length must lie in [1, k - 1]")
+    return tuple(1 if index < length else 0 for index in range(k - 1))
+
+
+def _top_prefix_action(k: int, length: int) -> tuple[int, ...]:
+    return _action_from_edge_signature(_top_prefix_signature(k, length))
 
 
 def _local_edge_action_library(k: int) -> tuple[tuple[int, ...], ...]:
@@ -932,6 +957,77 @@ def one_run_tie_analysis(
     )
 
 
+def top_prefix_tie_analysis(
+    k: int,
+    T: int,
+    occupancy_policy_fn,
+    tolerance: float = 1e-9,
+) -> tuple[list[TopPrefixTieAnalysisRow], float, float, float, float]:
+    occupancy = state_occupancy(k, T, occupancy_policy_fn)
+    optimal = optimal_values(k, T)
+    action_list = all_actions(k)
+    rows: list[TopPrefixTieAnalysisRow] = []
+    total_occupancy_weight = 0.0
+    total_value_weight = 0.0
+    top_prefix_occupancy_weight = 0.0
+    top_prefix_value_weight = 0.0
+
+    for time in range(T):
+        remaining_horizon = T - time
+        continuation = optimal[remaining_horizon - 1]
+        for state, occupancy_probability in occupancy[time].items():
+            q_by_action = {
+                action: _next_state_value(state, action, continuation)
+                for action in action_list
+            }
+            solution = solve_minimax_step(q_by_action, k)
+            if not solution.success:
+                raise RuntimeError(f"LP failed at state {state}: {solution.message}")
+
+            def score(action: tuple[int, ...]) -> float:
+                return q_by_action[action] - sum(solution.p[index] * action[index] for index in range(k))
+
+            unrestricted_best_score = max(score(action) for action in action_list)
+            value_weight = occupancy_probability * unrestricted_best_score
+            total_occupancy_weight += occupancy_probability
+            total_value_weight += value_weight
+
+            optimal_lengths = []
+            for length in range(1, k):
+                action = _top_prefix_action(k, length)
+                if max(score(action), score(complement(action))) >= unrestricted_best_score - tolerance:
+                    optimal_lengths.append(length)
+            optimal_lengths = tuple(optimal_lengths)
+            if not optimal_lengths:
+                continue
+
+            top_prefix_occupancy_weight += occupancy_probability
+            top_prefix_value_weight += value_weight
+            rows.append(
+                TopPrefixTieAnalysisRow(
+                    time=time,
+                    remaining_horizon=remaining_horizon,
+                    state=state,
+                    packet_type=packet_type(state),
+                    packet_gaps=_packet_gaps(state),
+                    adjacent_gaps=_gap_vector(state),
+                    occupancy_probability=occupancy_probability,
+                    unrestricted_best_score=unrestricted_best_score,
+                    optimal_lengths=optimal_lengths,
+                    min_optimal_length=min(optimal_lengths),
+                    max_optimal_length=max(optimal_lengths),
+                )
+            )
+
+    return (
+        rows,
+        total_occupancy_weight,
+        total_value_weight,
+        top_prefix_occupancy_weight,
+        top_prefix_value_weight,
+    )
+
+
 def _policy_registry(k: int) -> dict[str, object]:
     policies: dict[str, object] = {
         "comb": comb_policy,
@@ -1526,6 +1622,96 @@ def print_one_run_tie_analysis(
     )
 
 
+def print_top_prefix_tie_analysis(
+    k: int,
+    T: int,
+    occupancy_policy_name: str,
+    tolerance: float = 1e-9,
+    n: int = 20,
+) -> None:
+    policies = _policy_registry(k)
+    if occupancy_policy_name not in policies:
+        raise ValueError(f"unknown occupancy policy: {occupancy_policy_name}")
+
+    (
+        rows,
+        total_occupancy_weight,
+        total_value_weight,
+        top_prefix_occupancy_weight,
+        top_prefix_value_weight,
+    ) = top_prefix_tie_analysis(k, T, policies[occupancy_policy_name], tolerance=tolerance)
+
+    def value_weight(row: TopPrefixTieAnalysisRow) -> float:
+        return row.occupancy_probability * row.unrestricted_best_score
+
+    length_set_totals: dict[tuple[int, ...], float] = defaultdict(float)
+    min_length_totals: dict[int, float] = defaultdict(float)
+    max_length_totals: dict[int, float] = defaultdict(float)
+    multiple_regime_totals: dict[tuple[tuple[int, ...], tuple[int, ...]], float] = defaultdict(float)
+    regime_length_set_totals: dict[
+        tuple[tuple[int, ...], tuple[int, ...]],
+        dict[tuple[int, ...], float],
+    ] = defaultdict(lambda: defaultdict(float))
+    raw_rows = sorted(rows, key=value_weight, reverse=True)
+    for row in rows:
+        weight = value_weight(row)
+        length_set_totals[row.optimal_lengths] += weight
+        min_length_totals[row.min_optimal_length] += weight
+        max_length_totals[row.max_optimal_length] += weight
+        regime_key = (row.packet_type, row.packet_gaps)
+        regime_length_set_totals[regime_key][row.optimal_lengths] += weight
+        if len(row.optimal_lengths) > 1:
+            multiple_regime_totals[regime_key] += weight
+
+    visited_rows = sum(len(layer) for layer in state_occupancy(k, T, policies[occupancy_policy_name])[:-1])
+    print(f"Top-prefix tie analysis, k={k}, T={T}")
+    print()
+    print(f"occupancy policy: {occupancy_policy_name}")
+    print(f"tolerance: {tolerance:.3g}")
+    print(f"visited rows: {visited_rows}")
+    print(f"rows with optimal top-prefix action: {len(rows)}")
+    print(
+        "optimal top-prefix occupancy coverage:"
+        f" {top_prefix_occupancy_weight / total_occupancy_weight if total_occupancy_weight > 0 else 0.0:.6f}"
+    )
+    print(
+        "optimal top-prefix value coverage:"
+        f" {top_prefix_value_weight / total_value_weight if total_value_weight > 0 else 0.0:.6f}"
+    )
+    print()
+
+    print("Top optimal L sets by value weight:")
+    for lengths, weight in sorted(length_set_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
+        print(f"  {lengths}: {weight:.6f}")
+    print()
+    print("Top min optimal L by value weight:")
+    for length, weight in sorted(min_length_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
+        print(f"  {length}: {weight:.6f}")
+    print()
+    print("Top max optimal L by value weight:")
+    for length, weight in sorted(max_length_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
+        print(f"  {length}: {weight:.6f}")
+    print()
+    print("Top regimes where multiple L are optimal by value weight:")
+    for (ptype, gaps), weight in sorted(multiple_regime_totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
+        length_sets = regime_length_set_totals[(ptype, gaps)]
+        rendered_sets = ", ".join(
+            f"{lengths}:{set_weight:.6f}"
+            for lengths, set_weight in sorted(length_sets.items(), key=lambda pair: (-pair[1], pair[0]))[:5]
+        )
+        print(f"  packet type={ptype} gaps={gaps}: {weight:.6f} [{rendered_sets}]")
+    print()
+    print("Raw top rows by value weight:")
+    for row in raw_rows[:n]:
+        print(
+            f"  t={row.time:2d} rem={row.remaining_horizon:2d}"
+            f" state={row.state} ptype={row.packet_type}"
+            f" packet_gaps={row.packet_gaps} adjacent_gaps={row.adjacent_gaps}"
+            f" L={row.optimal_lengths}"
+            f" weight={value_weight(row):.6f}"
+        )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Finite-horizon expert game experiments")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1604,6 +1790,13 @@ def _build_parser() -> argparse.ArgumentParser:
     one_run_tie_analysis_parser.add_argument("--tolerance", type=float, default=1e-9)
     one_run_tie_analysis_parser.add_argument("-n", type=int, default=20)
 
+    top_prefix_tie_analysis_parser = subparsers.add_parser("top-prefix-tie-analysis")
+    top_prefix_tie_analysis_parser.add_argument("--k", type=int, required=True)
+    top_prefix_tie_analysis_parser.add_argument("--T", type=int, required=True)
+    top_prefix_tie_analysis_parser.add_argument("--occupancy-policy", default="comb")
+    top_prefix_tie_analysis_parser.add_argument("--tolerance", type=float, default=1e-9)
+    top_prefix_tie_analysis_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -1664,6 +1857,15 @@ def main() -> None:
         return
     if args.command == "one-run-tie-analysis":
         print_one_run_tie_analysis(
+            args.k,
+            args.T,
+            args.occupancy_policy,
+            tolerance=args.tolerance,
+            n=args.n,
+        )
+        return
+    if args.command == "top-prefix-tie-analysis":
+        print_top_prefix_tie_analysis(
             args.k,
             args.T,
             args.occupancy_policy,
