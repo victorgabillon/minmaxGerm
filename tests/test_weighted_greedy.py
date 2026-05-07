@@ -11,6 +11,7 @@ from expert_game_lab.experiments import (
     _prefix_one_run_action_library,
     _prefix_plus_tail_anchor_action_library,
     _local_edge_action_library,
+    _top_prefix_length_from_policy,
     evaluate_top_prefix_oracle,
     filter_weighted_greedy_contributions,
     library_oracle,
@@ -19,6 +20,7 @@ from expert_game_lab.experiments import (
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
     print_top_prefix_length_regimes,
+    print_top_prefix_policy_vs_oracle_labels,
     top_prefix_oracle_labels,
     top_prefix_tie_analysis,
     weighted_top_prefix_oracle_labels,
@@ -210,11 +212,24 @@ def test_weighted_top_prefix_oracle_labels_runs_for_all_selectors() -> None:
         assert all(row.selected_length in row.valid_lengths for row in rows)
 
 
+def test_top_prefix_length_from_policy_infers_support_length() -> None:
+    policy = [(0.5, (1, 0, 1, 0, 0)), (0.5, (0, 1, 0, 1, 1))]
+
+    assert _top_prefix_length_from_policy(policy) == 3
+
+
 def test_top_prefix_length_regimes_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
     print_top_prefix_length_regimes(3, 4, "min_valid", n=2)
 
     captured = capsys.readouterr()
     assert "Selected L=1" in captured.out
+
+
+def test_top_prefix_policy_vs_oracle_labels_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_top_prefix_policy_vs_oracle_labels(3, 4, "comb", "min_valid", n=2)
+
+    captured = capsys.readouterr()
+    assert "invalid occupancy" in captured.out
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:

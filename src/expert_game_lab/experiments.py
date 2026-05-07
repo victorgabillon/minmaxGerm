@@ -25,6 +25,8 @@ from .policies import (
     top_prefix_longest_policy,
     top_prefix_shortest_policy,
     top_prefix_three_regime_policy,
+    top_prefix_three_regime_v2_policy,
+    top_prefix_three_regime_v3_policy,
     top_prefix_tie_mimic_policy,
 )
 from .state import all_states, canon, packet_type
@@ -1337,6 +1339,8 @@ def _policy_registry(k: int) -> dict[str, object]:
         "top_prefix_longest": top_prefix_longest_policy,
         "top_prefix_shortest": top_prefix_shortest_policy,
         "top_prefix_three_regime": top_prefix_three_regime_policy,
+        "top_prefix_three_regime_v2": top_prefix_three_regime_v2_policy,
+        "top_prefix_three_regime_v3": top_prefix_three_regime_v3_policy,
         "top_prefix_tie_mimic": top_prefix_tie_mimic_policy,
     }
     if k == 5:
@@ -2115,6 +2119,133 @@ def _top_weighted_histogram(
     return tuple(sorted(totals.items(), key=lambda pair: (-pair[1], pair[0]))[:n])
 
 
+def _top_prefix_length_from_policy(policy: tuple[tuple[float, tuple[int, ...]], ...] | list[tuple[float, tuple[int, ...]]]) -> int:
+    signatures = {
+        _edge_signature(action)
+        for probability, action in policy
+        if probability > 1e-12
+    }
+    if len(signatures) != 1:
+        raise ValueError(f"policy support is not a single edge signature: {signatures}")
+    (signature,) = tuple(signatures)
+    if not any(signature):
+        return 0
+    intervals = _edge_run_intervals(signature)
+    if intervals != [(0, sum(signature) - 1)]:
+        raise ValueError(f"policy edge signature is not top-prefix: {_format_edge_signature(signature)}")
+    return sum(signature)
+
+
+def print_top_prefix_policy_vs_oracle_labels(
+    k: int,
+    T: int,
+    policy_name: str,
+    selector: str,
+    tolerance: float = 1e-9,
+    n: int = 20,
+) -> None:
+    policies = _policy_registry(k)
+    if policy_name not in policies:
+        raise ValueError(f"unknown policy: {policy_name}")
+    policy_fn = policies[policy_name]
+    rows = weighted_top_prefix_oracle_labels(
+        k,
+        T,
+        selector,
+        occupancy_policy_name=policy_name,
+        tolerance=tolerance,
+    )
+
+    row_policy_lengths: list[tuple[WeightedTopPrefixOracleLabelRow, int]] = [
+        (row, _top_prefix_length_from_policy(policy_fn(row.state)))
+        for row in rows
+    ]
+    invalid_items = [
+        (row, policy_length)
+        for row, policy_length in row_policy_lengths
+        if policy_length not in row.valid_lengths
+    ]
+    mismatch_items = [
+        (row, policy_length)
+        for row, policy_length in row_policy_lengths
+        if policy_length != row.selected_length
+    ]
+
+    invalid_occupancy = sum(row.occupancy_probability for row, _ in invalid_items)
+    invalid_value = sum(row.value_weight for row, _ in invalid_items)
+    mismatch_occupancy = sum(row.occupancy_probability for row, _ in mismatch_items)
+    mismatch_value = sum(row.value_weight for row, _ in mismatch_items)
+
+    print(f"Top-prefix policy vs oracle labels, k={k}, T={T}")
+    print()
+    print(f"policy: {policy_name}")
+    print(f"selector: {selector}")
+    print(f"tolerance: {tolerance:.3g}")
+    print(f"rows: {len(rows)}")
+    print(f"invalid occupancy: {invalid_occupancy:.6f}")
+    print(f"invalid value weight: {invalid_value:.6f}")
+    print(f"mismatch occupancy: {mismatch_occupancy:.6f}")
+    print(f"mismatch value weight: {mismatch_value:.6f}")
+    print()
+
+    grouped_invalid: dict[tuple[tuple[int, ...], tuple[int, ...]], list[tuple[WeightedTopPrefixOracleLabelRow, int]]] = defaultdict(list)
+    for row, policy_length in invalid_items:
+        grouped_invalid[(row.packet_type, row.packet_gaps)].append((row, policy_length))
+
+    print("Top invalid regimes by value weight:")
+    for (ptype, gaps), items in sorted(
+        grouped_invalid.items(),
+        key=lambda pair: (-sum(row.value_weight for row, _ in pair[1]), pair[0]),
+    )[:n]:
+        occupancy_mass = sum(row.occupancy_probability for row, _ in items)
+        value_weight = sum(row.value_weight for row, _ in items)
+        policy_hist = _top_weighted_histogram(
+            items,
+            lambda item: item[1],
+            lambda item: item[0].value_weight,
+            5,
+        )
+        valid_hist = _top_weighted_histogram(
+            items,
+            lambda item: item[0].valid_lengths,
+            lambda item: item[0].value_weight,
+            5,
+        )
+        adjacent_examples = tuple(
+            key
+            for key, _ in _top_weighted_histogram(
+                items,
+                lambda item: item[0].adjacent_gaps,
+                lambda item: item[0].value_weight,
+                3,
+            )
+        )
+        rendered_policy = ", ".join(f"{length}:{weight:.6f}" for length, weight in policy_hist)
+        rendered_valid = ", ".join(f"{lengths}:{weight:.6f}" for lengths, weight in valid_hist)
+        print(
+            f"  packet type={ptype} gaps={gaps}"
+            f" occupancy={occupancy_mass:.6f}"
+            f" value={value_weight:.6f}"
+            f" adjacent_examples={adjacent_examples}"
+            f" policy_L=[{rendered_policy}]"
+            f" oracle_valid=[{rendered_valid}]"
+        )
+    print()
+    print("Raw top invalid rows:")
+    for row, policy_length in sorted(invalid_items, key=lambda item: item[0].value_weight, reverse=True)[:n]:
+        marker = " fallback" if row.used_fallback else ""
+        print(
+            f"  t={row.time:2d} rem={row.remaining_horizon:2d}"
+            f" state={row.state} ptype={row.packet_type}"
+            f" packet_gaps={row.packet_gaps} adjacent_gaps={row.adjacent_gaps}"
+            f" prob={row.occupancy_probability:.6f}"
+            f" value_weight={row.value_weight:.6f}"
+            f" policy_L={policy_length}"
+            f" selected={row.selected_length}"
+            f" valid={row.valid_lengths}{marker}"
+        )
+
+
 def print_top_prefix_oracle_labels_weighted(
     k: int,
     T: int,
@@ -2442,6 +2573,18 @@ def _build_parser() -> argparse.ArgumentParser:
     top_prefix_length_regimes_parser.add_argument("--tolerance", type=float, default=1e-9)
     top_prefix_length_regimes_parser.add_argument("-n", type=int, default=20)
 
+    top_prefix_policy_vs_oracle_labels_parser = subparsers.add_parser("top-prefix-policy-vs-oracle-labels")
+    top_prefix_policy_vs_oracle_labels_parser.add_argument("--k", type=int, required=True)
+    top_prefix_policy_vs_oracle_labels_parser.add_argument("--T", type=int, required=True)
+    top_prefix_policy_vs_oracle_labels_parser.add_argument("--policy", required=True)
+    top_prefix_policy_vs_oracle_labels_parser.add_argument(
+        "--selector",
+        choices=("min_valid", "max_valid", "median_valid", "chase_preferred"),
+        default="min_valid",
+    )
+    top_prefix_policy_vs_oracle_labels_parser.add_argument("--tolerance", type=float, default=1e-9)
+    top_prefix_policy_vs_oracle_labels_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -2551,6 +2694,16 @@ def main() -> None:
             args.T,
             args.selector,
             occupancy_policy_name=args.occupancy_policy,
+            tolerance=args.tolerance,
+            n=args.n,
+        )
+        return
+    if args.command == "top-prefix-policy-vs-oracle-labels":
+        print_top_prefix_policy_vs_oracle_labels(
+            args.k,
+            args.T,
+            args.policy,
+            args.selector,
             tolerance=args.tolerance,
             n=args.n,
         )

@@ -13,6 +13,8 @@ from expert_game_lab.policies import (
     top_prefix_longest_policy,
     top_prefix_shortest_policy,
     top_prefix_three_regime_policy,
+    top_prefix_three_regime_v2_policy,
+    top_prefix_three_regime_v3_policy,
     top_prefix_tie_mimic_policy,
 )
 
@@ -156,6 +158,63 @@ def test_top_prefix_three_regime_policy_uses_expected_support(
     expected_support: set[tuple[int, ...]],
 ) -> None:
     policy = top_prefix_three_regime_policy(state)
+
+    assert {action for _, action in policy} == expected_support
+
+
+def test_top_prefix_three_regime_v2_policy_probabilities_sum_to_one_and_is_balanced() -> None:
+    policy = top_prefix_three_regime_v2_policy((3, 1, 1, 0, 0))
+
+    assert sum(probability for probability, _ in policy) == pytest.approx(1.0)
+    for index in range(5):
+        assert sum(probability * action[index] for probability, action in policy) == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_support"),
+    [
+        ((0, 0, 0, 0, 0), {(1, 0, 1, 0, 0), (0, 1, 0, 1, 1)}),
+        ((0, 0, 0, 0, 0, 0), {(1, 0, 1, 0, 1, 0), (0, 1, 0, 1, 0, 1)}),
+        ((0, 0, 0, 0, 0, 0, 0), {(1, 0, 1, 0, 1, 0, 0), (0, 1, 0, 1, 0, 1, 1)}),
+        ((3, 1, 1, 0, 0), {(1, 0, 1, 0, 0), (0, 1, 0, 1, 1)}),
+        ((4, 2, 2, 0, 0), {(1, 0, 1, 0, 0), (0, 1, 0, 1, 1)}),
+        ((3, 2, 2, 1, 1, 0), {(1, 0, 1, 0, 0, 0), (0, 1, 0, 1, 1, 1)}),
+        ((3, 2, 2, 1, 1, 0, 0), {(1, 0, 1, 0, 0, 0, 0), (0, 1, 0, 1, 1, 1, 1)}),
+        ((2, 1, 1, 1, 1, 1, 0), {(1, 0, 1, 0, 1, 0, 0), (0, 1, 0, 1, 0, 1, 1)}),
+        ((3, 0, 0, 0, 0), {(1, 0, 0, 0, 0), (0, 1, 1, 1, 1)}),
+    ],
+)
+def test_top_prefix_three_regime_v2_policy_uses_expected_support(
+    state: tuple[int, ...],
+    expected_support: set[tuple[int, ...]],
+) -> None:
+    policy = top_prefix_three_regime_v2_policy(state)
+
+    assert {action for _, action in policy} == expected_support
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_support"),
+    [
+        ((0, 0, 0, 0, 0), {(1, 0, 1, 0, 0), (0, 1, 0, 1, 1)}),
+        ((0, 0, 0, 0, 0, 0), {(1, 0, 1, 0, 1, 0), (0, 1, 0, 1, 0, 1)}),
+        ((0, 0, 0, 0, 0, 0, 0), {(1, 0, 1, 0, 1, 0, 0), (0, 1, 0, 1, 0, 1, 1)}),
+        ((3, 1, 1, 0, 0), {(1, 0, 1, 0, 0), (0, 1, 0, 1, 1)}),
+        ((4, 2, 2, 0, 0), {(1, 0, 1, 0, 0), (0, 1, 0, 1, 1)}),
+        ((3, 2, 2, 1, 1, 0), {(1, 0, 1, 0, 0, 0), (0, 1, 0, 1, 1, 1)}),
+        ((3, 2, 2, 1, 1, 1, 0), {(1, 0, 1, 0, 0, 0, 0), (0, 1, 0, 1, 1, 1, 1)}),
+        ((1, 1, 1, 1, 0, 0, 0), {(1, 0, 1, 0, 1, 0, 0), (0, 1, 0, 1, 0, 1, 1)}),
+        ((1, 1, 1, 0, 0, 0, 0), {(1, 0, 1, 0, 1, 0, 0), (0, 1, 0, 1, 0, 1, 1)}),
+        ((1, 1, 0, 0, 0, 0, 0), {(1, 0, 1, 0, 1, 0, 0), (0, 1, 0, 1, 0, 1, 1)}),
+        ((2, 2, 1, 1, 0, 0, 0), {(1, 0, 1, 0, 1, 0, 0), (0, 1, 0, 1, 0, 1, 1)}),
+        ((3, 0, 0, 0, 0), {(1, 0, 0, 0, 0), (0, 1, 1, 1, 1)}),
+    ],
+)
+def test_top_prefix_three_regime_v3_policy_uses_expected_support(
+    state: tuple[int, ...],
+    expected_support: set[tuple[int, ...]],
+) -> None:
+    policy = top_prefix_three_regime_v3_policy(state)
 
     assert {action for _, action in policy} == expected_support
 
