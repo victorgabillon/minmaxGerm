@@ -20,6 +20,7 @@ from expert_game_lab.experiments import (
     summarize_weighted_greedy_by_regime,
     top_prefix_oracle_labels,
     top_prefix_tie_analysis,
+    weighted_top_prefix_oracle_labels,
 )
 from expert_game_lab.policies import comb_policy, packet_minimal_frontier_policy
 
@@ -196,6 +197,16 @@ def test_top_prefix_oracle_labels_runs() -> None:
     assert rows
     assert all(row.valid_lengths for row in rows)
     assert all(row.selected_length in row.valid_lengths for row in rows)
+
+
+def test_weighted_top_prefix_oracle_labels_runs_for_all_selectors() -> None:
+    for selector in ("min_valid", "max_valid", "median_valid", "chase_preferred"):
+        rows = weighted_top_prefix_oracle_labels(3, 4, selector)
+
+        assert rows
+        assert sum(row.occupancy_probability for row in rows) == pytest.approx(4.0)
+        assert all(row.valid_lengths for row in rows)
+        assert all(row.selected_length in row.valid_lengths for row in rows)
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:
