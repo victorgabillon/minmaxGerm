@@ -40,6 +40,84 @@ def fixed_rank_policy(ones: set[int]):
     return policy
 
 
+def _top_prefix_action(k: int, length: int) -> tuple[int, ...]:
+    if k == 0:
+        return ()
+    if length < 0 or length > k - 1:
+        raise ValueError("prefix edge length must lie in [0, k - 1]")
+
+    bits = [1]
+    for index in range(k - 1):
+        if index < length:
+            bits.append(1 - bits[-1])
+        else:
+            bits.append(bits[-1])
+    return tuple(bits)
+
+
+def _top_prefix_policy_with_length(x: tuple[int, ...], length: int) -> Policy:
+    state = canon(x)
+    if not state:
+        return [(1.0, ())]
+    return _balanced_from_base([(1.0, _top_prefix_action(len(state), length))])
+
+
+def top_prefix_shortest_policy(x: tuple[int, ...]) -> Policy:
+    state = canon(x)
+    return _top_prefix_policy_with_length(state, min(1, max(len(state) - 1, 0)))
+
+
+def top_prefix_longest_policy(x: tuple[int, ...]) -> Policy:
+    state = canon(x)
+    return _top_prefix_policy_with_length(state, max(len(state) - 1, 0))
+
+
+def top_prefix_chase_length_policy(x: tuple[int, ...]) -> Policy:
+    state = canon(x)
+    return _top_prefix_policy_with_length(state, min(3, max(len(state) - 1, 0)))
+
+
+def _top_prefix_gap_sum_policy(x: tuple[int, ...], prefer_long: bool) -> Policy:
+    state = canon(x)
+    if not state:
+        return [(1.0, ())]
+    if len(state) == 1:
+        return _top_prefix_policy_with_length(state, 0)
+
+    gaps = tuple(state[index] - state[index + 1] for index in range(len(state) - 1))
+    prefix_sums = tuple(sum(gaps[:length]) for length in range(1, len(state)))
+    min_sum = min(prefix_sums)
+    candidate_lengths = [
+        length
+        for length, prefix_sum in enumerate(prefix_sums, start=1)
+        if prefix_sum == min_sum
+    ]
+    length = max(candidate_lengths) if prefer_long else min(candidate_lengths)
+    return _top_prefix_policy_with_length(state, length)
+
+
+def top_prefix_gap_sum_short_policy(x: tuple[int, ...]) -> Policy:
+    return _top_prefix_gap_sum_policy(x, prefer_long=False)
+
+
+def top_prefix_gap_sum_long_policy(x: tuple[int, ...]) -> Policy:
+    return _top_prefix_gap_sum_policy(x, prefer_long=True)
+
+
+def top_prefix_tie_mimic_policy(x: tuple[int, ...]) -> Policy:
+    state = canon(x)
+    diagnostic_lengths = {
+        5: 1,
+        6: 3,
+        7: 3,
+    }
+    fallback_length = min(3, max(len(state) - 1, 0))
+    return _top_prefix_policy_with_length(
+        state,
+        min(diagnostic_lengths.get(len(state), fallback_length), max(len(state) - 1, 0)),
+    )
+
+
 def packet_frontier_policy(x: tuple[int, ...]) -> Policy:
     state = canon(x)
     if not state:

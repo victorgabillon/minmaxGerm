@@ -7,6 +7,12 @@ from expert_game_lab.policies import (
     packet_regime5_policy,
     packet_regime5b_policy,
     packet_regime5c_policy,
+    top_prefix_chase_length_policy,
+    top_prefix_gap_sum_long_policy,
+    top_prefix_gap_sum_short_policy,
+    top_prefix_longest_policy,
+    top_prefix_shortest_policy,
+    top_prefix_tie_mimic_policy,
 )
 
 
@@ -90,6 +96,49 @@ def test_packet_minimal_frontier_policy_support_contains_singleton_top_splits() 
         (1, 1, 1, 0, 1),
     }
     assert expected <= support
+
+
+@pytest.mark.parametrize(
+    ("policy_fn", "expected_support"),
+    [
+        (top_prefix_shortest_policy, {(1, 0, 0, 0, 0), (0, 1, 1, 1, 1)}),
+        (top_prefix_longest_policy, {(1, 0, 1, 0, 1), (0, 1, 0, 1, 0)}),
+        (top_prefix_chase_length_policy, {(1, 0, 1, 0, 0), (0, 1, 0, 1, 1)}),
+    ],
+)
+def test_top_prefix_fixed_length_policies_use_expected_support(
+    policy_fn,
+    expected_support: set[tuple[int, ...]],
+) -> None:
+    policy = policy_fn((0, 0, 0, 0, 0))
+
+    assert {action for _, action in policy} == expected_support
+    assert sum(probability for probability, _ in policy) == pytest.approx(1.0)
+
+
+def test_top_prefix_gap_sum_policies_differ_only_on_tie_breaks() -> None:
+    short_policy = top_prefix_gap_sum_short_policy((0, 0, 0, 0))
+    long_policy = top_prefix_gap_sum_long_policy((0, 0, 0, 0))
+
+    assert {action for _, action in short_policy} == {
+        (1, 0, 0, 0),
+        (0, 1, 1, 1),
+    }
+    assert {action for _, action in long_policy} == {
+        (1, 0, 1, 0),
+        (0, 1, 0, 1),
+    }
+
+
+def test_top_prefix_tie_mimic_policy_uses_diagnostic_lengths() -> None:
+    assert {action for _, action in top_prefix_tie_mimic_policy((0, 0, 0, 0, 0))} == {
+        (1, 0, 0, 0, 0),
+        (0, 1, 1, 1, 1),
+    }
+    assert {action for _, action in top_prefix_tie_mimic_policy((0, 0, 0, 0, 0, 0))} == {
+        (1, 0, 1, 0, 0, 0),
+        (0, 1, 0, 1, 1, 1),
+    }
 
 
 @pytest.mark.parametrize(

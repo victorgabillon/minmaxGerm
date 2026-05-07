@@ -12,6 +12,12 @@ from .policies import (
     packet_regime5_policy,
     packet_regime5b_policy,
     packet_regime5c_policy,
+    top_prefix_chase_length_policy,
+    top_prefix_gap_sum_long_policy,
+    top_prefix_gap_sum_short_policy,
+    top_prefix_longest_policy,
+    top_prefix_shortest_policy,
+    top_prefix_tie_mimic_policy,
 )
 from .state import all_states, canon, packets
 
@@ -41,4 +47,10 @@ __all__ = [
     "packets",
     "solve_minimax_step",
     "state_occupancy",
+    "top_prefix_chase_length_policy",
+    "top_prefix_gap_sum_long_policy",
+    "top_prefix_gap_sum_short_policy",
+    "top_prefix_longest_policy",
+    "top_prefix_shortest_policy",
+    "top_prefix_tie_mimic_policy",
 ]

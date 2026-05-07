@@ -19,6 +19,12 @@ from .policies import (
     packet_regime5_policy,
     packet_regime5b_policy,
     packet_regime5c_policy,
+    top_prefix_chase_length_policy,
+    top_prefix_gap_sum_long_policy,
+    top_prefix_gap_sum_short_policy,
+    top_prefix_longest_policy,
+    top_prefix_shortest_policy,
+    top_prefix_tie_mimic_policy,
 )
 from .state import all_states, canon, packet_type
 
@@ -932,6 +938,12 @@ def _policy_registry(k: int) -> dict[str, object]:
         "packet_balanced_partition": packet_balanced_partition_policy,
         "packet_frontier": packet_frontier_policy,
         "packet_minimal_frontier": packet_minimal_frontier_policy,
+        "top_prefix_chase_length": top_prefix_chase_length_policy,
+        "top_prefix_gap_sum_long": top_prefix_gap_sum_long_policy,
+        "top_prefix_gap_sum_short": top_prefix_gap_sum_short_policy,
+        "top_prefix_longest": top_prefix_longest_policy,
+        "top_prefix_shortest": top_prefix_shortest_policy,
+        "top_prefix_tie_mimic": top_prefix_tie_mimic_policy,
     }
     if k == 5:
         policies["chase5"] = fixed_rank_policy({1, 3})
