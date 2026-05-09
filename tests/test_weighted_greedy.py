@@ -21,6 +21,8 @@ from expert_game_lab.experiments import (
     summarize_weighted_greedy_by_regime,
     print_top_prefix_length_regimes,
     print_top_prefix_policy_vs_oracle_labels,
+    print_top_prefix_scale_rows,
+    print_top_prefix_valid_length_structure,
     top_prefix_oracle_labels,
     top_prefix_tie_analysis,
     weighted_top_prefix_oracle_labels,
@@ -230,6 +232,20 @@ def test_top_prefix_policy_vs_oracle_labels_printer_runs(capsys: pytest.CaptureF
 
     captured = capsys.readouterr()
     assert "invalid occupancy" in captured.out
+
+
+def test_top_prefix_valid_length_structure_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_top_prefix_valid_length_structure(3, 4, "min_valid", occupancy_policy_name="comb", n=2)
+
+    captured = capsys.readouterr()
+    assert "Valid parity histogram by value" in captured.out
+
+
+def test_top_prefix_scale_rows_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_top_prefix_scale_rows(3, 4, "min_valid", occupancy_policy_name="comb", n=2)
+
+    captured = capsys.readouterr()
+    assert "near-global L" in captured.out
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:

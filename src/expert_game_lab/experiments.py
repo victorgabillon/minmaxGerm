@@ -29,6 +29,7 @@ from .policies import (
     top_prefix_three_regime_v3_policy,
     top_prefix_three_regime_v4_policy,
     top_prefix_three_regime_v5_policy,
+    top_prefix_three_regime_v6_policy,
     top_prefix_tie_mimic_policy,
 )
 from .state import all_states, canon, packet_type
@@ -1345,6 +1346,7 @@ def _policy_registry(k: int) -> dict[str, object]:
         "top_prefix_three_regime_v3": top_prefix_three_regime_v3_policy,
         "top_prefix_three_regime_v4": top_prefix_three_regime_v4_policy,
         "top_prefix_three_regime_v5": top_prefix_three_regime_v5_policy,
+        "top_prefix_three_regime_v6": top_prefix_three_regime_v6_policy,
         "top_prefix_tie_mimic": top_prefix_tie_mimic_policy,
     }
     if k == 5:
@@ -2250,6 +2252,259 @@ def print_top_prefix_policy_vs_oracle_labels(
         )
 
 
+def _length_parity_category(lengths: tuple[int, ...]) -> str:
+    has_odd = any(length % 2 == 1 for length in lengths)
+    has_even = any(length % 2 == 0 for length in lengths)
+    if has_odd and has_even:
+        return "mixed"
+    if has_even:
+        return "even-only"
+    return "odd-only"
+
+
+def _is_contiguous_lengths(lengths: tuple[int, ...]) -> bool:
+    if not lengths:
+        return False
+    return lengths == tuple(range(min(lengths), max(lengths) + 1))
+
+
+def _policy_lengths_for_rows(
+    k: int,
+    rows: list[WeightedTopPrefixOracleLabelRow],
+    occupancy_policy_name: str | None,
+) -> dict[WeightedTopPrefixOracleLabelRow, int] | None:
+    if occupancy_policy_name is None or occupancy_policy_name == "oracle":
+        return None
+    policies = _policy_registry(k)
+    policy = policies.get(occupancy_policy_name)
+    if policy is None:
+        return None
+    try:
+        return {
+            row: _top_prefix_length_from_policy(policy(row.state))
+            for row in rows
+        }
+    except ValueError:
+        return None
+
+
+def print_top_prefix_valid_length_structure(
+    k: int,
+    T: int,
+    selector: str,
+    occupancy_policy_name: str | None = "oracle",
+    tolerance: float = 1e-9,
+    n: int = 20,
+) -> None:
+    rows = weighted_top_prefix_oracle_labels(
+        k,
+        T,
+        selector,
+        occupancy_policy_name=occupancy_policy_name,
+        tolerance=tolerance,
+    )
+    policy_lengths = _policy_lengths_for_rows(k, rows, occupancy_policy_name)
+
+    print(f"Top-prefix valid length structure, k={k}, T={T}")
+    print()
+    print(f"selector: {selector}")
+    print(f"occupancy policy: {occupancy_policy_name or 'oracle'}")
+    print(f"tolerance: {tolerance:.3g}")
+    print(f"rows: {len(rows)}")
+    print()
+
+    print("Selected L histogram by value:")
+    for length, weight in _top_weighted_histogram(rows, lambda row: row.selected_length, lambda row: row.value_weight, n):
+        print(f"  {length}: {weight:.6f}")
+    print()
+
+    print("Valid parity histogram by value:")
+    for category, weight in _top_weighted_histogram(rows, lambda row: _length_parity_category(row.valid_lengths), lambda row: row.value_weight, n):
+        print(f"  {category}: {weight:.6f}")
+    print()
+
+    print("Selected parity histogram by value:")
+    for category, weight in _top_weighted_histogram(rows, lambda row: "even" if row.selected_length % 2 == 0 else "odd", lambda row: row.value_weight, n):
+        print(f"  {category}: {weight:.6f}")
+    print()
+
+    print("Contiguous valid-length sets by value:")
+    for contiguous, weight in _top_weighted_histogram(rows, lambda row: _is_contiguous_lengths(row.valid_lengths), lambda row: row.value_weight, n):
+        print(f"  {contiguous}: {weight:.6f}")
+    print()
+
+    probes = tuple(dict.fromkeys((1, 3, 5, k - 3, k - 2, k - 1)))
+    print("Probe membership by value:")
+    for probe in probes:
+        if 1 <= probe <= k - 1:
+            contains_weight = sum(row.value_weight for row in rows if probe in row.valid_lengths)
+            selected_weight = sum(row.value_weight for row in rows if row.selected_length == probe)
+            print(f"  L={probe}: contains={contains_weight:.6f} selected={selected_weight:.6f}")
+    print()
+
+    print("Max valid L distance from k-1 by value:")
+    for distance, weight in _top_weighted_histogram(rows, lambda row: (k - 1) - max(row.valid_lengths), lambda row: row.value_weight, n):
+        print(f"  distance {distance}: {weight:.6f}")
+    print()
+
+    print("Top regimes where selected L is even:")
+    even_selected = [row for row in rows if row.selected_length % 2 == 0]
+    _print_valid_length_structure_regimes(even_selected, n)
+    print()
+
+    print("Top regimes with even-only valid lengths:")
+    even_only = [row for row in rows if _length_parity_category(row.valid_lengths) == "even-only"]
+    _print_valid_length_structure_regimes(even_only, n)
+    print()
+
+    print("Top regimes where valid lengths include even but selected L is odd:")
+    mixed_even_unselected = [
+        row
+        for row in rows
+        if any(length % 2 == 0 for length in row.valid_lengths)
+        and row.selected_length % 2 == 1
+    ]
+    _print_valid_length_structure_regimes(mixed_even_unselected, n)
+    print()
+
+    if policy_lengths is not None:
+        print("Raw top rows where valid lengths contain even but policy L is invalid:")
+        rows_with_policy_invalid_even = [
+            row
+            for row in rows
+            if any(length % 2 == 0 for length in row.valid_lengths)
+            and policy_lengths[row] not in row.valid_lengths
+        ]
+        for row in sorted(rows_with_policy_invalid_even, key=lambda item: item.value_weight, reverse=True)[:n]:
+            marker = " fallback" if row.used_fallback else ""
+            print(
+                f"  t={row.time:2d} rem={row.remaining_horizon:2d}"
+                f" state={row.state} ptype={row.packet_type}"
+                f" packet_gaps={row.packet_gaps} adjacent_gaps={row.adjacent_gaps}"
+                f" prob={row.occupancy_probability:.6f}"
+                f" value_weight={row.value_weight:.6f}"
+                f" policy_L={policy_lengths[row]}"
+                f" selected={row.selected_length}"
+                f" valid={row.valid_lengths}{marker}"
+            )
+        print()
+
+    print("Raw top rows by value:")
+    for row in sorted(rows, key=lambda item: item.value_weight, reverse=True)[:n]:
+        marker = " fallback" if row.used_fallback else ""
+        print(
+            f"  t={row.time:2d} rem={row.remaining_horizon:2d}"
+            f" state={row.state} ptype={row.packet_type}"
+            f" packet_gaps={row.packet_gaps} adjacent_gaps={row.adjacent_gaps}"
+            f" prob={row.occupancy_probability:.6f}"
+            f" value_weight={row.value_weight:.6f}"
+            f" valid={row.valid_lengths} selected={row.selected_length}{marker}"
+        )
+
+
+def _print_valid_length_structure_regimes(
+    rows: list[WeightedTopPrefixOracleLabelRow],
+    n: int,
+) -> None:
+    regime_rows: dict[tuple[tuple[int, ...], tuple[int, ...]], list[WeightedTopPrefixOracleLabelRow]] = defaultdict(list)
+    for row in rows:
+        regime_rows[(row.packet_type, row.packet_gaps)].append(row)
+    for (ptype, gaps), items in sorted(
+        regime_rows.items(),
+        key=lambda pair: (-sum(row.value_weight for row in pair[1]), pair[0]),
+    )[:n]:
+        selected_hist = _top_weighted_histogram(
+            items,
+            lambda row: row.selected_length,
+            lambda row: row.value_weight,
+            5,
+        )
+        valid_hist = _top_weighted_histogram(
+            items,
+            lambda row: row.valid_lengths,
+            lambda row: row.value_weight,
+            5,
+        )
+        adjacent_examples = tuple(
+            key
+            for key, _ in _top_weighted_histogram(
+                items,
+                lambda row: row.adjacent_gaps,
+                lambda row: row.value_weight,
+                3,
+            )
+        )
+        rendered_selected = ", ".join(f"{length}:{weight:.6f}" for length, weight in selected_hist)
+        rendered_valid = ", ".join(f"{lengths}:{weight:.6f}" for lengths, weight in valid_hist)
+        print(
+            f"  packet type={ptype} gaps={gaps}"
+            f" occupancy={sum(row.occupancy_probability for row in items):.6f}"
+            f" value={sum(row.value_weight for row in items):.6f}"
+            f" adjacent_examples={adjacent_examples}"
+            f" selected=[{rendered_selected}]"
+            f" valid=[{rendered_valid}]"
+        )
+
+
+def print_top_prefix_scale_rows(
+    k: int,
+    T: int,
+    selector: str,
+    occupancy_policy_name: str | None = "oracle",
+    tolerance: float = 1e-9,
+    n: int = 20,
+) -> None:
+    rows = weighted_top_prefix_oracle_labels(
+        k,
+        T,
+        selector,
+        occupancy_policy_name=occupancy_policy_name,
+        tolerance=tolerance,
+    )
+    near_global_length = max(1, k - 3)
+    global_length = k - 1
+
+    print(f"Top-prefix scale rows, k={k}, T={T}")
+    print()
+    print(f"selector: {selector}")
+    print(f"occupancy policy: {occupancy_policy_name or 'oracle'}")
+    print(f"tolerance: {tolerance:.3g}")
+    print(f"near-global L: {near_global_length}")
+    print(f"global L: {global_length}")
+    print(f"rows: {len(rows)}")
+    print()
+
+    filters = (
+        ("even-only valid lengths", lambda row: _length_parity_category(row.valid_lengths) == "even-only"),
+        (
+            f"max(valid_lengths) >= k-3 ({near_global_length})",
+            lambda row: max(row.valid_lengths) >= near_global_length,
+        ),
+        (f"k-3 ({near_global_length}) in valid_lengths", lambda row: near_global_length in row.valid_lengths),
+        (f"k-1 ({global_length}) in valid_lengths", lambda row: global_length in row.valid_lengths),
+    )
+
+    for title, predicate in filters:
+        filtered = [row for row in rows if predicate(row)]
+        print(title)
+        print(f"  occupancy: {sum(row.occupancy_probability for row in filtered):.6f}")
+        print(f"  value: {sum(row.value_weight for row in filtered):.6f}")
+        print("  top regimes:")
+        _print_valid_length_structure_regimes(filtered, n)
+        print("  raw rows:")
+        for row in sorted(filtered, key=lambda item: item.value_weight, reverse=True)[:n]:
+            marker = " fallback" if row.used_fallback else ""
+            print(
+                f"    t={row.time:2d} rem={row.remaining_horizon:2d}"
+                f" state={row.state} ptype={row.packet_type}"
+                f" packet_gaps={row.packet_gaps} adjacent_gaps={row.adjacent_gaps}"
+                f" prob={row.occupancy_probability:.6f}"
+                f" value_weight={row.value_weight:.6f}"
+                f" valid={row.valid_lengths} selected={row.selected_length}{marker}"
+            )
+        print()
+
+
 def print_top_prefix_oracle_labels_weighted(
     k: int,
     T: int,
@@ -2589,6 +2844,30 @@ def _build_parser() -> argparse.ArgumentParser:
     top_prefix_policy_vs_oracle_labels_parser.add_argument("--tolerance", type=float, default=1e-9)
     top_prefix_policy_vs_oracle_labels_parser.add_argument("-n", type=int, default=20)
 
+    top_prefix_valid_length_structure_parser = subparsers.add_parser("top-prefix-valid-length-structure")
+    top_prefix_valid_length_structure_parser.add_argument("--k", type=int, required=True)
+    top_prefix_valid_length_structure_parser.add_argument("--T", type=int, required=True)
+    top_prefix_valid_length_structure_parser.add_argument(
+        "--selector",
+        choices=("min_valid", "max_valid", "median_valid", "chase_preferred"),
+        required=True,
+    )
+    top_prefix_valid_length_structure_parser.add_argument("--occupancy-policy", default="oracle")
+    top_prefix_valid_length_structure_parser.add_argument("--tolerance", type=float, default=1e-9)
+    top_prefix_valid_length_structure_parser.add_argument("-n", type=int, default=20)
+
+    top_prefix_scale_rows_parser = subparsers.add_parser("top-prefix-scale-rows")
+    top_prefix_scale_rows_parser.add_argument("--k", type=int, required=True)
+    top_prefix_scale_rows_parser.add_argument("--T", type=int, required=True)
+    top_prefix_scale_rows_parser.add_argument(
+        "--selector",
+        choices=("min_valid", "max_valid", "median_valid", "chase_preferred"),
+        required=True,
+    )
+    top_prefix_scale_rows_parser.add_argument("--occupancy-policy", default="oracle")
+    top_prefix_scale_rows_parser.add_argument("--tolerance", type=float, default=1e-9)
+    top_prefix_scale_rows_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -2708,6 +2987,26 @@ def main() -> None:
             args.T,
             args.policy,
             args.selector,
+            tolerance=args.tolerance,
+            n=args.n,
+        )
+        return
+    if args.command == "top-prefix-valid-length-structure":
+        print_top_prefix_valid_length_structure(
+            args.k,
+            args.T,
+            args.selector,
+            occupancy_policy_name=args.occupancy_policy,
+            tolerance=args.tolerance,
+            n=args.n,
+        )
+        return
+    if args.command == "top-prefix-scale-rows":
+        print_top_prefix_scale_rows(
+            args.k,
+            args.T,
+            args.selector,
+            occupancy_policy_name=args.occupancy_policy,
             tolerance=args.tolerance,
             n=args.n,
         )

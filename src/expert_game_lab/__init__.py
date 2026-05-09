@@ -22,6 +22,7 @@ from .policies import (
     top_prefix_three_regime_v3_policy,
     top_prefix_three_regime_v4_policy,
     top_prefix_three_regime_v5_policy,
+    top_prefix_three_regime_v6_policy,
     top_prefix_tie_mimic_policy,
 )
 from .state import all_states, canon, packets
@@ -62,5 +63,6 @@ __all__ = [
     "top_prefix_three_regime_v3_policy",
     "top_prefix_three_regime_v4_policy",
     "top_prefix_three_regime_v5_policy",
+    "top_prefix_three_regime_v6_policy",
     "top_prefix_tie_mimic_policy",
 ]
