@@ -222,6 +222,26 @@ class WeightedTopPrefixOracleLabelRow:
         return self.occupancy_probability * self.unrestricted_best_score
 
 
+@dataclass(frozen=True)
+class PolicyOccupancyDiffRow:
+    time: int
+    remaining_horizon: int
+    state: tuple[int, ...]
+    packet_type: tuple[int, ...]
+    packet_gaps: tuple[int, ...]
+    adjacent_gaps: tuple[int, ...]
+    occupancy_a: float
+    occupancy_b: float
+    diff: float
+    unrestricted_best_score: float
+    value_diff_weight: float
+    valid_lengths: tuple[int, ...]
+    selected_length: int
+    policy_a_length: int
+    policy_b_length: int
+    used_fallback: bool
+
+
 def _format_action(action: tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in action)
 
@@ -2254,6 +2274,125 @@ def print_top_prefix_policy_vs_oracle_labels(
         )
 
 
+def policy_occupancy_diff(
+    k: int,
+    T: int,
+    policy_a_name: str,
+    policy_b_name: str,
+    selector: str,
+    tolerance: float = 1e-9,
+) -> list[PolicyOccupancyDiffRow]:
+    policies = _policy_registry(k)
+    if policy_a_name not in policies:
+        raise ValueError(f"unknown policy A: {policy_a_name}")
+    if policy_b_name not in policies:
+        raise ValueError(f"unknown policy B: {policy_b_name}")
+
+    policy_a = policies[policy_a_name]
+    policy_b = policies[policy_b_name]
+    occupancy_a = state_occupancy(k, T, policy_a)
+    occupancy_b = state_occupancy(k, T, policy_b)
+    optimal = optimal_values(k, T)
+    rows: list[PolicyOccupancyDiffRow] = []
+
+    for time in range(T):
+        remaining_horizon = T - time
+        continuation = optimal[remaining_horizon - 1]
+        states = set(occupancy_a[time]) | set(occupancy_b[time])
+        for state in states:
+            probability_a = occupancy_a[time].get(state, 0.0)
+            probability_b = occupancy_b[time].get(state, 0.0)
+            diff = probability_b - probability_a
+            if abs(diff) <= 1e-15:
+                continue
+            unrestricted_best_score = _unrestricted_best_score(k, state, continuation)
+            valid_lengths, used_fallback = _optimal_top_prefix_lengths(
+                k,
+                state,
+                continuation,
+                tolerance,
+            )
+            rows.append(
+                PolicyOccupancyDiffRow(
+                    time=time,
+                    remaining_horizon=remaining_horizon,
+                    state=state,
+                    packet_type=packet_type(state),
+                    packet_gaps=_packet_gaps(state),
+                    adjacent_gaps=_gap_vector(state),
+                    occupancy_a=probability_a,
+                    occupancy_b=probability_b,
+                    diff=diff,
+                    unrestricted_best_score=unrestricted_best_score,
+                    value_diff_weight=diff * unrestricted_best_score,
+                    valid_lengths=valid_lengths,
+                    selected_length=_select_top_prefix_length(valid_lengths, selector),
+                    policy_a_length=_top_prefix_length_from_policy(policy_a(state)),
+                    policy_b_length=_top_prefix_length_from_policy(policy_b(state)),
+                    used_fallback=used_fallback,
+                )
+            )
+    return rows
+
+
+def print_policy_occupancy_diff(
+    k: int,
+    T: int,
+    policy_a_name: str,
+    policy_b_name: str,
+    selector: str,
+    tolerance: float = 1e-9,
+    n: int = 20,
+) -> None:
+    rows = policy_occupancy_diff(
+        k,
+        T,
+        policy_a_name,
+        policy_b_name,
+        selector,
+        tolerance=tolerance,
+    )
+    positive_shift = sum(row.diff for row in rows if row.diff > 0.0)
+    negative_shift = sum(row.diff for row in rows if row.diff < 0.0)
+
+    print(f"Policy occupancy diff, k={k}, T={T}")
+    print()
+    print(f"policy A: {policy_a_name}")
+    print(f"policy B: {policy_b_name}")
+    print(f"selector: {selector}")
+    print(f"tolerance: {tolerance:.3g}")
+    print(f"rows: {len(rows)}")
+    print(f"total positive occupancy shift A->B: {positive_shift:.6f}")
+    print(f"total negative occupancy shift A->B: {negative_shift:.6f}")
+    print()
+
+    def print_rows(title: str, selected_rows: list[PolicyOccupancyDiffRow]) -> None:
+        print(title)
+        for row in selected_rows[:n]:
+            marker = " fallback" if row.used_fallback else ""
+            print(
+                f"  t={row.time:2d} rem={row.remaining_horizon:2d}"
+                f" state={row.state} ptype={row.packet_type}"
+                f" packet_gaps={row.packet_gaps} adjacent_gaps={row.adjacent_gaps}"
+                f" occ_a={row.occupancy_a:.6f} occ_b={row.occupancy_b:.6f}"
+                f" diff={row.diff:.6f} value_diff={row.value_diff_weight:.6f}"
+                f" valid={row.valid_lengths} selected={row.selected_length}"
+                f" A_L={row.policy_a_length} B_L={row.policy_b_length}{marker}"
+            )
+        print()
+
+    gained = sorted(
+        (row for row in rows if row.diff > 0.0),
+        key=lambda row: (-row.value_diff_weight, row.time, row.state),
+    )
+    lost = sorted(
+        (row for row in rows if row.diff < 0.0),
+        key=lambda row: (row.value_diff_weight, row.time, row.state),
+    )
+    print_rows("Top states gained by policy B by value-diff weight:", gained)
+    print_rows("Top states lost by policy B by value-diff weight:", lost)
+
+
 def _length_parity_category(lengths: tuple[int, ...]) -> str:
     has_odd = any(length % 2 == 1 for length in lengths)
     has_even = any(length % 2 == 0 for length in lengths)
@@ -2870,6 +3009,19 @@ def _build_parser() -> argparse.ArgumentParser:
     top_prefix_scale_rows_parser.add_argument("--tolerance", type=float, default=1e-9)
     top_prefix_scale_rows_parser.add_argument("-n", type=int, default=20)
 
+    policy_occupancy_diff_parser = subparsers.add_parser("policy-occupancy-diff")
+    policy_occupancy_diff_parser.add_argument("--k", type=int, required=True)
+    policy_occupancy_diff_parser.add_argument("--T", type=int, required=True)
+    policy_occupancy_diff_parser.add_argument("--policy-a", required=True)
+    policy_occupancy_diff_parser.add_argument("--policy-b", required=True)
+    policy_occupancy_diff_parser.add_argument(
+        "--selector",
+        choices=("min_valid", "max_valid", "median_valid", "chase_preferred"),
+        default="min_valid",
+    )
+    policy_occupancy_diff_parser.add_argument("--tolerance", type=float, default=1e-9)
+    policy_occupancy_diff_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -3009,6 +3161,17 @@ def main() -> None:
             args.T,
             args.selector,
             occupancy_policy_name=args.occupancy_policy,
+            tolerance=args.tolerance,
+            n=args.n,
+        )
+        return
+    if args.command == "policy-occupancy-diff":
+        print_policy_occupancy_diff(
+            args.k,
+            args.T,
+            args.policy_a,
+            args.policy_b,
+            args.selector,
             tolerance=args.tolerance,
             n=args.n,
         )

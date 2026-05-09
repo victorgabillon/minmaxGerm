@@ -21,6 +21,7 @@ from expert_game_lab.experiments import (
     summarize_weighted_greedy_by_regime,
     print_top_prefix_length_regimes,
     print_top_prefix_policy_vs_oracle_labels,
+    print_policy_occupancy_diff,
     print_top_prefix_scale_rows,
     print_top_prefix_valid_length_structure,
     top_prefix_oracle_labels,
@@ -246,6 +247,13 @@ def test_top_prefix_scale_rows_printer_runs(capsys: pytest.CaptureFixture[str]) 
 
     captured = capsys.readouterr()
     assert "near-global L" in captured.out
+
+
+def test_policy_occupancy_diff_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_policy_occupancy_diff(3, 4, "comb", "top_prefix_shortest", "min_valid", n=2)
+
+    captured = capsys.readouterr()
+    assert "total positive occupancy shift" in captured.out
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:
