@@ -307,23 +307,24 @@ class TopPrefixRestrictedOptimalResult:
 
 
 @dataclass(frozen=True)
-class OneRunRestrictedCandidate:
-    interval: tuple[int, int]
+class EdgeRunRestrictedCandidate:
+    intervals: tuple[tuple[int, int], ...]
     edge_signature: tuple[int, ...]
     action: tuple[int, ...]
 
 
 @dataclass(frozen=True)
-class OneRunRestrictedOptimalResult:
+class EdgeRunRestrictedOptimalResult:
+    max_runs: int
     library_size: int
     value: float
     optimal_value: float
     gap: float
     normalized_gap: float
-    selected_interval_counts: tuple[tuple[tuple[int, int], int], ...]
-    occupancy_selected_interval_weights: tuple[tuple[tuple[int, int], float], ...]
-    top_regime_selected_intervals: tuple[
-        tuple[tuple[int, ...], tuple[int, ...], float, tuple[tuple[tuple[int, int], float], ...]],
+    selected_signature_counts: tuple[tuple[str, int], ...]
+    occupancy_selected_signature_weights: tuple[tuple[str, float], ...]
+    top_regime_selected_signatures: tuple[
+        tuple[tuple[int, ...], tuple[int, ...], float, tuple[tuple[str, float], ...]],
         ...
     ]
 
@@ -486,20 +487,27 @@ def _one_run_edge_action_library(k: int) -> tuple[tuple[int, ...], ...]:
     return _actions_from_edge_signatures(signatures)
 
 
-def _one_run_restricted_candidates(k: int) -> tuple[OneRunRestrictedCandidate, ...]:
+def _edge_run_restricted_candidates(k: int, max_runs: int) -> tuple[EdgeRunRestrictedCandidate, ...]:
     if k < 2:
         return ()
-    candidates = []
-    for start, end in _all_edge_blocks(k - 1):
-        signature = tuple(1 if start <= index <= end else 0 for index in range(k - 1))
+    candidates: list[EdgeRunRestrictedCandidate] = []
+    for edge_bits in range(1, 2 ** (k - 1)):
+        signature = tuple((edge_bits >> index) & 1 for index in reversed(range(k - 1)))
+        intervals = tuple(_edge_run_intervals(signature))
+        if not intervals or len(intervals) > max_runs:
+            continue
         candidates.append(
-            OneRunRestrictedCandidate(
-                interval=(start, end),
+            EdgeRunRestrictedCandidate(
+                intervals=intervals,
                 edge_signature=signature,
                 action=_action_from_edge_signature(signature),
             )
         )
-    return tuple(candidates)
+    return tuple(sorted(candidates, key=lambda candidate: (candidate.intervals, candidate.edge_signature)))
+
+
+def _one_run_restricted_candidates(k: int) -> tuple[EdgeRunRestrictedCandidate, ...]:
+    return _edge_run_restricted_candidates(k, 1)
 
 
 def _prefix_one_run_action_library(k: int) -> tuple[tuple[int, ...], ...]:
@@ -2979,29 +2987,32 @@ def _balanced_action_pair_value(
     )
 
 
-def one_run_restricted_optimal(
+def edge_run_restricted_optimal(
     k: int,
     T: int,
+    max_runs: int,
     n: int = 20,
-) -> OneRunRestrictedOptimalResult:
+) -> EdgeRunRestrictedOptimalResult:
     if T < 0:
         raise ValueError("T must be nonnegative")
     if k < 2:
-        raise ValueError("k must be at least 2 for one-run restricted optimal")
+        raise ValueError("k must be at least 2 for edge-run restricted optimal")
+    if max_runs < 1:
+        raise ValueError("max_runs must be positive")
 
-    candidates = _one_run_restricted_candidates(k)
+    candidates = _edge_run_restricted_candidates(k, max_runs)
     state_layers = [tuple(all_states(k, used)) for used in range(T + 1)]
     terminal_states = state_layers[T]
     values: list[dict[tuple[int, ...], float]] = [
         {state: float(max(state, default=0)) for state in terminal_states}
     ]
-    argmax_candidates: list[dict[tuple[int, ...], OneRunRestrictedCandidate]] = [{}]
-    selected_interval_counts: dict[tuple[int, int], int] = defaultdict(int)
+    argmax_candidates: list[dict[tuple[int, ...], EdgeRunRestrictedCandidate]] = [{}]
+    selected_signature_counts: dict[str, int] = defaultdict(int)
 
     for horizon in range(1, T + 1):
         previous = values[horizon - 1]
         current: dict[tuple[int, ...], float] = {}
-        current_argmax: dict[tuple[int, ...], OneRunRestrictedCandidate] = {}
+        current_argmax: dict[tuple[int, ...], EdgeRunRestrictedCandidate] = {}
         for state in state_layers[T - horizon]:
             candidate_values = tuple(
                 (
@@ -3012,11 +3023,11 @@ def one_run_restricted_optimal(
             )
             best_candidate, best_value = max(
                 candidate_values,
-                key=lambda item: (item[1], -item[0].interval[0], -item[0].interval[1]),
+                key=lambda item: (item[1], _format_edge_signature(item[0].edge_signature)),
             )
             current[state] = best_value
             current_argmax[state] = best_candidate
-            selected_interval_counts[best_candidate.interval] += 1
+            selected_signature_counts[_format_edge_signature(best_candidate.edge_signature)] += 1
         values.append(current)
         argmax_candidates.append(current_argmax)
 
@@ -3028,25 +3039,26 @@ def one_run_restricted_optimal(
 
     occupancy: list[dict[tuple[int, ...], float]] = [defaultdict(float) for _ in range(T + 1)]
     occupancy[0][zero] = 1.0
-    occupancy_selected_weights: dict[tuple[int, int], float] = defaultdict(float)
+    occupancy_selected_weights: dict[str, float] = defaultdict(float)
     regime_selected_weights: dict[
         tuple[tuple[int, ...], tuple[int, ...]],
-        dict[tuple[int, int], float],
+        dict[str, float],
     ] = defaultdict(lambda: defaultdict(float))
     regime_weights: dict[tuple[tuple[int, ...], tuple[int, ...]], float] = defaultdict(float)
     for time in range(T):
         remaining_horizon = T - time
         for state, probability in occupancy[time].items():
             candidate = argmax_candidates[remaining_horizon][state]
-            occupancy_selected_weights[candidate.interval] += probability
+            signature = _format_edge_signature(candidate.edge_signature)
+            occupancy_selected_weights[signature] += probability
             regime_key = (packet_type(state), _packet_gaps(state))
-            regime_selected_weights[regime_key][candidate.interval] += probability
+            regime_selected_weights[regime_key][signature] += probability
             regime_weights[regime_key] += probability
             for action_probability, action in ((0.5, candidate.action), (0.5, complement(candidate.action))):
                 next_state = canon(tuple(state[index] + action[index] for index in range(k)))
                 occupancy[time + 1][next_state] += probability * action_probability
 
-    top_regime_selected_intervals = []
+    top_regime_selected_signatures = []
     for regime_key, weight in sorted(regime_weights.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
         selected_hist = tuple(
             sorted(
@@ -3054,32 +3066,43 @@ def one_run_restricted_optimal(
                 key=lambda pair: (-pair[1], pair[0]),
             )
         )
-        top_regime_selected_intervals.append((*regime_key, weight, selected_hist))
+        top_regime_selected_signatures.append((*regime_key, weight, selected_hist))
 
-    return OneRunRestrictedOptimalResult(
+    return EdgeRunRestrictedOptimalResult(
+        max_runs=max_runs,
         library_size=len(candidates),
         value=restricted_value,
         optimal_value=optimal_value,
         gap=gap,
         normalized_gap=normalized_gap,
-        selected_interval_counts=tuple(
-            sorted(selected_interval_counts.items(), key=lambda pair: (-pair[1], pair[0]))
+        selected_signature_counts=tuple(
+            sorted(selected_signature_counts.items(), key=lambda pair: (-pair[1], pair[0]))
         ),
-        occupancy_selected_interval_weights=tuple(
+        occupancy_selected_signature_weights=tuple(
             sorted(occupancy_selected_weights.items(), key=lambda pair: (-pair[1], pair[0]))
         ),
-        top_regime_selected_intervals=tuple(top_regime_selected_intervals),
+        top_regime_selected_signatures=tuple(top_regime_selected_signatures),
     )
 
 
-def print_one_run_restricted_optimal(
+def one_run_restricted_optimal(
     k: int,
     T: int,
     n: int = 20,
-) -> None:
-    result = one_run_restricted_optimal(k, T, n=n)
+) -> EdgeRunRestrictedOptimalResult:
+    return edge_run_restricted_optimal(k, T, 1, n=n)
 
-    print(f"One-run restricted optimal, k={k}, T={T}")
+
+def print_edge_run_restricted_optimal(
+    k: int,
+    T: int,
+    max_runs: int,
+    n: int = 20,
+) -> None:
+    result = edge_run_restricted_optimal(k, T, max_runs, n=n)
+
+    label = "One-run" if max_runs == 1 else f"{max_runs}-run"
+    print(f"{label} restricted optimal, k={k}, T={T}")
     print()
     print(f"library size: {result.library_size}")
     print(f"V_star: {result.optimal_value:.6f}")
@@ -3088,23 +3111,31 @@ def print_one_run_restricted_optimal(
     print(f"gap/sqrt(T): {result.normalized_gap:.6f}")
     print()
 
-    print("Selected edge interval histogram over DP states:")
-    for interval, count in result.selected_interval_counts[:n]:
-        print(f"  {interval}: {count}")
+    print("Selected edge-signature histogram over DP states:")
+    for signature, count in result.selected_signature_counts[:n]:
+        print(f"  {signature}: {count}")
     print()
 
-    print("Selected edge interval histogram by restricted-policy occupancy:")
-    for interval, weight in result.occupancy_selected_interval_weights[:n]:
-        print(f"  {interval}: {weight:.6f}")
+    print("Selected edge-signature histogram by restricted-policy occupancy:")
+    for signature, weight in result.occupancy_selected_signature_weights[:n]:
+        print(f"  {signature}: {weight:.6f}")
     print()
 
     print("Top regimes by restricted-policy occupancy:")
-    for ptype, gaps, weight, selected_hist in result.top_regime_selected_intervals[:n]:
+    for ptype, gaps, weight, selected_hist in result.top_regime_selected_signatures[:n]:
         rendered = ", ".join(
-            f"{interval}:{interval_weight:.6f}"
-            for interval, interval_weight in selected_hist[:5]
+            f"{signature}:{signature_weight:.6f}"
+            for signature, signature_weight in selected_hist[:5]
         )
         print(f"  packet type={ptype} gaps={gaps} occupancy={weight:.6f} selected=[{rendered}]")
+
+
+def print_one_run_restricted_optimal(
+    k: int,
+    T: int,
+    n: int = 20,
+) -> None:
+    print_edge_run_restricted_optimal(k, T, 1, n=n)
 
 
 def _length_parity_category(lengths: tuple[int, ...]) -> str:
@@ -3766,6 +3797,11 @@ def _build_parser() -> argparse.ArgumentParser:
     one_run_restricted_optimal_parser.add_argument("--T", type=int, required=True)
     one_run_restricted_optimal_parser.add_argument("-n", type=int, default=20)
 
+    two_run_restricted_optimal_parser = subparsers.add_parser("two-run-restricted-optimal")
+    two_run_restricted_optimal_parser.add_argument("--k", type=int, required=True)
+    two_run_restricted_optimal_parser.add_argument("--T", type=int, required=True)
+    two_run_restricted_optimal_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -3951,6 +3987,14 @@ def main() -> None:
         print_one_run_restricted_optimal(
             args.k,
             args.T,
+            n=args.n,
+        )
+        return
+    if args.command == "two-run-restricted-optimal":
+        print_edge_run_restricted_optimal(
+            args.k,
+            args.T,
+            2,
             n=args.n,
         )
         return

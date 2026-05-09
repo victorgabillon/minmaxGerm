@@ -7,6 +7,7 @@ from expert_game_lab.experiments import (
     _edge_run_intervals,
     _gap_vector,
     _is_one_run,
+    _edge_run_restricted_candidates,
     _one_run_edge_action_library,
     _one_run_restricted_candidates,
     _prefix_one_run_action_library,
@@ -18,8 +19,10 @@ from expert_game_lab.experiments import (
     library_oracle,
     one_run_tie_analysis,
     one_run_restricted_optimal,
+    edge_run_restricted_optimal,
     occupation_weighted_greedy_defects,
     print_one_run_restricted_optimal,
+    print_edge_run_restricted_optimal,
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
     print_top_prefix_length_regimes,
@@ -92,12 +95,20 @@ def test_strict_action_libraries_have_expected_membership() -> None:
 
 def test_one_run_restricted_candidates_include_prefix_and_centered_intervals() -> None:
     candidates = _one_run_restricted_candidates(5)
-    by_interval = {candidate.interval: candidate for candidate in candidates}
+    by_interval = {candidate.intervals[0]: candidate for candidate in candidates}
 
     assert (0, 2) in by_interval
     assert by_interval[(0, 2)].edge_signature == (1, 1, 1, 0)
     assert (1, 2) in by_interval
     assert by_interval[(1, 2)].edge_signature == (0, 1, 1, 0)
+
+
+def test_two_run_restricted_candidates_include_one_run_and_two_run_patterns() -> None:
+    candidates = _edge_run_restricted_candidates(9, 2)
+    signatures = {candidate.edge_signature for candidate in candidates}
+
+    assert (1, 1, 1, 0, 0, 0, 0, 0) in signatures
+    assert (1, 0, 1, 1, 0, 0, 0, 0) in signatures
 
 
 @pytest.mark.parametrize(("k", "T", "policy_fn"), [(2, 4, comb_policy), (3, 5, packet_minimal_frontier_policy)])
@@ -301,11 +312,25 @@ def test_one_run_restricted_optimal_printer_runs(capsys: pytest.CaptureFixture[s
     assert "library size" in captured.out
 
 
+def test_two_run_restricted_optimal_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_edge_run_restricted_optimal(3, 4, 2, n=2)
+
+    captured = capsys.readouterr()
+    assert "library size" in captured.out
+
+
 def test_one_run_restricted_value_dominates_top_prefix_restricted() -> None:
     one_run_result = one_run_restricted_optimal(3, 4)
     top_prefix_result = top_prefix_restricted_optimal(3, 4, "all")
 
     assert one_run_result.value >= top_prefix_result.value - 1e-9
+
+
+def test_two_run_restricted_value_dominates_one_run_restricted() -> None:
+    two_run_result = edge_run_restricted_optimal(3, 4, 2)
+    one_run_result = one_run_restricted_optimal(3, 4)
+
+    assert two_run_result.value >= one_run_result.value - 1e-9
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:
