@@ -306,6 +306,28 @@ class TopPrefixRestrictedOptimalResult:
     ]
 
 
+@dataclass(frozen=True)
+class OneRunRestrictedCandidate:
+    interval: tuple[int, int]
+    edge_signature: tuple[int, ...]
+    action: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class OneRunRestrictedOptimalResult:
+    library_size: int
+    value: float
+    optimal_value: float
+    gap: float
+    normalized_gap: float
+    selected_interval_counts: tuple[tuple[tuple[int, int], int], ...]
+    occupancy_selected_interval_weights: tuple[tuple[tuple[int, int], float], ...]
+    top_regime_selected_intervals: tuple[
+        tuple[tuple[int, ...], tuple[int, ...], float, tuple[tuple[tuple[int, int], float], ...]],
+        ...
+    ]
+
+
 def _format_action(action: tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in action)
 
@@ -462,6 +484,22 @@ def _one_run_edge_action_library(k: int) -> tuple[tuple[int, ...], ...]:
         if _edge_signature_run_count(sig) <= 1:
             signatures.add(sig)
     return _actions_from_edge_signatures(signatures)
+
+
+def _one_run_restricted_candidates(k: int) -> tuple[OneRunRestrictedCandidate, ...]:
+    if k < 2:
+        return ()
+    candidates = []
+    for start, end in _all_edge_blocks(k - 1):
+        signature = tuple(1 if start <= index <= end else 0 for index in range(k - 1))
+        candidates.append(
+            OneRunRestrictedCandidate(
+                interval=(start, end),
+                edge_signature=signature,
+                action=_action_from_edge_signature(signature),
+            )
+        )
+    return tuple(candidates)
 
 
 def _prefix_one_run_action_library(k: int) -> tuple[tuple[int, ...], ...]:
@@ -2929,6 +2967,146 @@ def print_top_prefix_restricted_optimal(
         print(f"  packet type={ptype} gaps={gaps} occupancy={weight:.6f} selected=[{rendered}]")
 
 
+def _balanced_action_pair_value(
+    state: tuple[int, ...],
+    action: tuple[int, ...],
+    continuation: dict[tuple[int, ...], float],
+) -> float:
+    return (
+        0.5 * _next_state_value(state, action, continuation)
+        + 0.5 * _next_state_value(state, complement(action), continuation)
+        - 0.5
+    )
+
+
+def one_run_restricted_optimal(
+    k: int,
+    T: int,
+    n: int = 20,
+) -> OneRunRestrictedOptimalResult:
+    if T < 0:
+        raise ValueError("T must be nonnegative")
+    if k < 2:
+        raise ValueError("k must be at least 2 for one-run restricted optimal")
+
+    candidates = _one_run_restricted_candidates(k)
+    state_layers = [tuple(all_states(k, used)) for used in range(T + 1)]
+    terminal_states = state_layers[T]
+    values: list[dict[tuple[int, ...], float]] = [
+        {state: float(max(state, default=0)) for state in terminal_states}
+    ]
+    argmax_candidates: list[dict[tuple[int, ...], OneRunRestrictedCandidate]] = [{}]
+    selected_interval_counts: dict[tuple[int, int], int] = defaultdict(int)
+
+    for horizon in range(1, T + 1):
+        previous = values[horizon - 1]
+        current: dict[tuple[int, ...], float] = {}
+        current_argmax: dict[tuple[int, ...], OneRunRestrictedCandidate] = {}
+        for state in state_layers[T - horizon]:
+            candidate_values = tuple(
+                (
+                    candidate,
+                    _balanced_action_pair_value(state, candidate.action, previous),
+                )
+                for candidate in candidates
+            )
+            best_candidate, best_value = max(
+                candidate_values,
+                key=lambda item: (item[1], -item[0].interval[0], -item[0].interval[1]),
+            )
+            current[state] = best_value
+            current_argmax[state] = best_candidate
+            selected_interval_counts[best_candidate.interval] += 1
+        values.append(current)
+        argmax_candidates.append(current_argmax)
+
+    zero = tuple(0 for _ in range(k))
+    restricted_value = values[T][zero]
+    optimal_value = optimal_values(k, T)[T][zero]
+    gap = optimal_value - restricted_value
+    normalized_gap = gap / (T ** 0.5 if T > 0 else 1.0)
+
+    occupancy: list[dict[tuple[int, ...], float]] = [defaultdict(float) for _ in range(T + 1)]
+    occupancy[0][zero] = 1.0
+    occupancy_selected_weights: dict[tuple[int, int], float] = defaultdict(float)
+    regime_selected_weights: dict[
+        tuple[tuple[int, ...], tuple[int, ...]],
+        dict[tuple[int, int], float],
+    ] = defaultdict(lambda: defaultdict(float))
+    regime_weights: dict[tuple[tuple[int, ...], tuple[int, ...]], float] = defaultdict(float)
+    for time in range(T):
+        remaining_horizon = T - time
+        for state, probability in occupancy[time].items():
+            candidate = argmax_candidates[remaining_horizon][state]
+            occupancy_selected_weights[candidate.interval] += probability
+            regime_key = (packet_type(state), _packet_gaps(state))
+            regime_selected_weights[regime_key][candidate.interval] += probability
+            regime_weights[regime_key] += probability
+            for action_probability, action in ((0.5, candidate.action), (0.5, complement(candidate.action))):
+                next_state = canon(tuple(state[index] + action[index] for index in range(k)))
+                occupancy[time + 1][next_state] += probability * action_probability
+
+    top_regime_selected_intervals = []
+    for regime_key, weight in sorted(regime_weights.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
+        selected_hist = tuple(
+            sorted(
+                regime_selected_weights[regime_key].items(),
+                key=lambda pair: (-pair[1], pair[0]),
+            )
+        )
+        top_regime_selected_intervals.append((*regime_key, weight, selected_hist))
+
+    return OneRunRestrictedOptimalResult(
+        library_size=len(candidates),
+        value=restricted_value,
+        optimal_value=optimal_value,
+        gap=gap,
+        normalized_gap=normalized_gap,
+        selected_interval_counts=tuple(
+            sorted(selected_interval_counts.items(), key=lambda pair: (-pair[1], pair[0]))
+        ),
+        occupancy_selected_interval_weights=tuple(
+            sorted(occupancy_selected_weights.items(), key=lambda pair: (-pair[1], pair[0]))
+        ),
+        top_regime_selected_intervals=tuple(top_regime_selected_intervals),
+    )
+
+
+def print_one_run_restricted_optimal(
+    k: int,
+    T: int,
+    n: int = 20,
+) -> None:
+    result = one_run_restricted_optimal(k, T, n=n)
+
+    print(f"One-run restricted optimal, k={k}, T={T}")
+    print()
+    print(f"library size: {result.library_size}")
+    print(f"V_star: {result.optimal_value:.6f}")
+    print(f"V_restricted: {result.value:.6f}")
+    print(f"gap: {result.gap:.6f}")
+    print(f"gap/sqrt(T): {result.normalized_gap:.6f}")
+    print()
+
+    print("Selected edge interval histogram over DP states:")
+    for interval, count in result.selected_interval_counts[:n]:
+        print(f"  {interval}: {count}")
+    print()
+
+    print("Selected edge interval histogram by restricted-policy occupancy:")
+    for interval, weight in result.occupancy_selected_interval_weights[:n]:
+        print(f"  {interval}: {weight:.6f}")
+    print()
+
+    print("Top regimes by restricted-policy occupancy:")
+    for ptype, gaps, weight, selected_hist in result.top_regime_selected_intervals[:n]:
+        rendered = ", ".join(
+            f"{interval}:{interval_weight:.6f}"
+            for interval, interval_weight in selected_hist[:5]
+        )
+        print(f"  packet type={ptype} gaps={gaps} occupancy={weight:.6f} selected=[{rendered}]")
+
+
 def _length_parity_category(lengths: tuple[int, ...]) -> str:
     has_odd = any(length % 2 == 1 for length in lengths)
     has_even = any(length % 2 == 0 for length in lengths)
@@ -3583,6 +3761,11 @@ def _build_parser() -> argparse.ArgumentParser:
     top_prefix_restricted_optimal_parser.add_argument("--length-set", choices=("scale", "all"), default="scale")
     top_prefix_restricted_optimal_parser.add_argument("-n", type=int, default=20)
 
+    one_run_restricted_optimal_parser = subparsers.add_parser("one-run-restricted-optimal")
+    one_run_restricted_optimal_parser.add_argument("--k", type=int, required=True)
+    one_run_restricted_optimal_parser.add_argument("--T", type=int, required=True)
+    one_run_restricted_optimal_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -3761,6 +3944,13 @@ def main() -> None:
             args.k,
             args.T,
             args.length_set,
+            n=args.n,
+        )
+        return
+    if args.command == "one-run-restricted-optimal":
+        print_one_run_restricted_optimal(
+            args.k,
+            args.T,
             n=args.n,
         )
         return

@@ -8,6 +8,7 @@ from expert_game_lab.experiments import (
     _gap_vector,
     _is_one_run,
     _one_run_edge_action_library,
+    _one_run_restricted_candidates,
     _prefix_one_run_action_library,
     _prefix_plus_tail_anchor_action_library,
     _local_edge_action_library,
@@ -16,7 +17,9 @@ from expert_game_lab.experiments import (
     filter_weighted_greedy_contributions,
     library_oracle,
     one_run_tie_analysis,
+    one_run_restricted_optimal,
     occupation_weighted_greedy_defects,
+    print_one_run_restricted_optimal,
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
     print_top_prefix_length_regimes,
@@ -28,6 +31,7 @@ from expert_game_lab.experiments import (
     print_top_prefix_scale_rows,
     print_top_prefix_valid_length_structure,
     top_prefix_oracle_labels,
+    top_prefix_restricted_optimal,
     top_prefix_tie_analysis,
     weighted_top_prefix_oracle_labels,
 )
@@ -84,6 +88,16 @@ def test_strict_action_libraries_have_expected_membership() -> None:
     assert (0, 0, 1, 0, 1, 0) not in prefix6
     assert (1, 0, 1, 0, 0, 1) in prefix_tail6
     assert (1, 0, 1, 0, 1, 0) not in prefix_tail6
+
+
+def test_one_run_restricted_candidates_include_prefix_and_centered_intervals() -> None:
+    candidates = _one_run_restricted_candidates(5)
+    by_interval = {candidate.interval: candidate for candidate in candidates}
+
+    assert (0, 2) in by_interval
+    assert by_interval[(0, 2)].edge_signature == (1, 1, 1, 0)
+    assert (1, 2) in by_interval
+    assert by_interval[(1, 2)].edge_signature == (0, 1, 1, 0)
 
 
 @pytest.mark.parametrize(("k", "T", "policy_fn"), [(2, 4, comb_policy), (3, 5, packet_minimal_frontier_policy)])
@@ -278,6 +292,20 @@ def test_top_prefix_restricted_optimal_printer_runs(capsys: pytest.CaptureFixtur
 
     captured = capsys.readouterr()
     assert "V_restricted" in captured.out
+
+
+def test_one_run_restricted_optimal_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_one_run_restricted_optimal(3, 4, n=2)
+
+    captured = capsys.readouterr()
+    assert "library size" in captured.out
+
+
+def test_one_run_restricted_value_dominates_top_prefix_restricted() -> None:
+    one_run_result = one_run_restricted_optimal(3, 4)
+    top_prefix_result = top_prefix_restricted_optimal(3, 4, "all")
+
+    assert one_run_result.value >= top_prefix_result.value - 1e-9
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:
