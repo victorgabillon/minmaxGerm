@@ -18,6 +18,7 @@ from expert_game_lab.policies import (
     top_prefix_three_regime_v4_policy,
     top_prefix_three_regime_v5_policy,
     top_prefix_three_regime_v6_policy,
+    top_prefix_three_regime_v7_policy,
     top_prefix_tie_mimic_policy,
 )
 
@@ -280,6 +281,26 @@ def test_top_prefix_three_regime_v6_policy_refines_global_and_broad_local_mass(
     expected_support: set[tuple[int, ...]],
 ) -> None:
     policy = top_prefix_three_regime_v6_policy(state)
+
+    assert {action for _, action in policy} == expected_support
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_support"),
+    [
+        ((1, 1, 1, 1, 1, 0, 0, 0, 0), {(1, 0, 1, 0, 1, 0, 1, 1, 1), (0, 1, 0, 1, 0, 1, 0, 0, 0)}),
+        ((1, 1, 1, 1, 0, 0, 0, 0, 0), {(1, 0, 1, 0, 1, 0, 1, 1, 1), (0, 1, 0, 1, 0, 1, 0, 0, 0)}),
+        ((2, 2, 2, 1, 1, 1, 0, 0, 0), {(1, 0, 1, 0, 1, 0, 1, 1, 1), (0, 1, 0, 1, 0, 1, 0, 0, 0)}),
+        ((2, 1, 1, 1, 1, 0, 0, 0, 0), {(1, 0, 1, 0, 1, 0, 1, 1, 1), (0, 1, 0, 1, 0, 1, 0, 0, 0)}),
+        ((0, 0, 0, 0, 0, 0, 0, 0, 0), {(1, 0, 1, 0, 1, 0, 1, 0, 1), (0, 1, 0, 1, 0, 1, 0, 1, 0)}),
+        ((0, 0, 0, 0, 0, 0, 0, 0), {(1, 0, 1, 0, 1, 0, 1, 0), (0, 1, 0, 1, 0, 1, 0, 1)}),
+    ],
+)
+def test_top_prefix_three_regime_v7_policy_adds_near_global_scale(
+    state: tuple[int, ...],
+    expected_support: set[tuple[int, ...]],
+) -> None:
+    policy = top_prefix_three_regime_v7_policy(state)
 
     assert {action for _, action in policy} == expected_support
 
