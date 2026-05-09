@@ -291,6 +291,21 @@ class TopPrefixCandidateValueRow:
         return self.occupancy_probability * self.regret
 
 
+@dataclass(frozen=True)
+class TopPrefixRestrictedOptimalResult:
+    length_set_name: str
+    value: float
+    optimal_value: float
+    gap: float
+    normalized_gap: float
+    selected_length_counts: tuple[tuple[int, int], ...]
+    occupancy_selected_length_weights: tuple[tuple[int, float], ...]
+    top_regime_selected_lengths: tuple[
+        tuple[tuple[int, ...], tuple[int, ...], float, tuple[tuple[int, float], ...]],
+        ...
+    ]
+
+
 def _format_action(action: tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in action)
 
@@ -2454,6 +2469,14 @@ def _candidate_scale_lengths(k: int) -> tuple[int, ...]:
     )
 
 
+def _top_prefix_candidate_lengths(k: int, length_set: str) -> tuple[int, ...]:
+    if length_set == "scale":
+        return _candidate_scale_lengths(k)
+    if length_set == "all":
+        return tuple(range(1, k))
+    raise ValueError(f"unknown top-prefix length set: {length_set}")
+
+
 def top_prefix_next_state_debt(
     k: int,
     T: int,
@@ -2651,6 +2674,7 @@ def top_prefix_candidate_values(
     k: int,
     T: int,
     policy_name: str,
+    length_set: str = "scale",
 ) -> list[TopPrefixCandidateValueRow]:
     policies = _policy_registry(k)
     if policy_name not in policies:
@@ -2658,7 +2682,7 @@ def top_prefix_candidate_values(
     policy = policies[policy_name]
     occupancy = state_occupancy(k, T, policy)
     policy_values = evaluate_balanced_policy(k, T, policy)
-    candidate_lengths = _candidate_scale_lengths(k)
+    candidate_lengths = _top_prefix_candidate_lengths(k, length_set)
     rows: list[TopPrefixCandidateValueRow] = []
 
     for time in range(T):
@@ -2702,13 +2726,15 @@ def print_top_prefix_candidate_values(
     k: int,
     T: int,
     policy_name: str,
+    length_set: str = "scale",
     n: int = 20,
 ) -> None:
-    rows = top_prefix_candidate_values(k, T, policy_name)
+    rows = top_prefix_candidate_values(k, T, policy_name, length_set=length_set)
 
     print(f"Top-prefix candidate value, k={k}, T={T}")
     print()
     print(f"policy: {policy_name}")
+    print(f"length set: {length_set}")
     print(f"rows: {len(rows)}")
     print(f"total weighted regret: {sum(row.weighted_regret for row in rows):.6f}")
     print()
@@ -2776,6 +2802,131 @@ def print_top_prefix_candidate_values(
             f" weighted_regret={row.weighted_regret:.6f}"
             f" scores=[{scores}]"
         )
+
+
+def top_prefix_restricted_optimal(
+    k: int,
+    T: int,
+    length_set: str,
+    n: int = 20,
+) -> TopPrefixRestrictedOptimalResult:
+    if T < 0:
+        raise ValueError("T must be nonnegative")
+    if k < 2:
+        raise ValueError("k must be at least 2 for top-prefix restricted optimal")
+
+    candidate_lengths = _top_prefix_candidate_lengths(k, length_set)
+    state_layers = [tuple(all_states(k, used)) for used in range(T + 1)]
+    terminal_states = state_layers[T]
+    values: list[dict[tuple[int, ...], float]] = [
+        {state: float(max(state, default=0)) for state in terminal_states}
+    ]
+    argmax_lengths: list[dict[tuple[int, ...], int]] = [{}]
+    selected_length_counts: dict[int, int] = defaultdict(int)
+
+    for horizon in range(1, T + 1):
+        previous = values[horizon - 1]
+        current: dict[tuple[int, ...], float] = {}
+        current_argmax: dict[tuple[int, ...], int] = {}
+        for state in state_layers[T - horizon]:
+            length_values = tuple(
+                (
+                    length,
+                    _candidate_top_prefix_policy_value(k, state, length, previous),
+                )
+                for length in candidate_lengths
+            )
+            best_length, best_value = max(length_values, key=lambda item: (item[1], -item[0]))
+            current[state] = best_value
+            current_argmax[state] = best_length
+            selected_length_counts[best_length] += 1
+        values.append(current)
+        argmax_lengths.append(current_argmax)
+
+    zero = tuple(0 for _ in range(k))
+    restricted_value = values[T][zero]
+    optimal_value = optimal_values(k, T)[T][zero]
+    gap = optimal_value - restricted_value
+    normalized_gap = gap / (T ** 0.5 if T > 0 else 1.0)
+
+    occupancy: list[dict[tuple[int, ...], float]] = [defaultdict(float) for _ in range(T + 1)]
+    occupancy[0][zero] = 1.0
+    occupancy_selected_weights: dict[int, float] = defaultdict(float)
+    regime_selected_weights: dict[
+        tuple[tuple[int, ...], tuple[int, ...]],
+        dict[int, float],
+    ] = defaultdict(lambda: defaultdict(float))
+    regime_weights: dict[tuple[tuple[int, ...], tuple[int, ...]], float] = defaultdict(float)
+    for time in range(T):
+        remaining_horizon = T - time
+        for state, probability in occupancy[time].items():
+            length = argmax_lengths[remaining_horizon][state]
+            occupancy_selected_weights[length] += probability
+            regime_key = (packet_type(state), _packet_gaps(state))
+            regime_selected_weights[regime_key][length] += probability
+            regime_weights[regime_key] += probability
+            for action_probability, action in _balanced_top_prefix_policy(k, length):
+                next_state = canon(tuple(state[index] + action[index] for index in range(k)))
+                occupancy[time + 1][next_state] += probability * action_probability
+
+    top_regime_selected_lengths = []
+    for regime_key, weight in sorted(regime_weights.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
+        selected_hist = tuple(
+            sorted(
+                regime_selected_weights[regime_key].items(),
+                key=lambda pair: (-pair[1], pair[0]),
+            )
+        )
+        top_regime_selected_lengths.append((*regime_key, weight, selected_hist))
+
+    return TopPrefixRestrictedOptimalResult(
+        length_set_name=length_set,
+        value=restricted_value,
+        optimal_value=optimal_value,
+        gap=gap,
+        normalized_gap=normalized_gap,
+        selected_length_counts=tuple(sorted(selected_length_counts.items(), key=lambda pair: (-pair[1], pair[0]))),
+        occupancy_selected_length_weights=tuple(
+            sorted(occupancy_selected_weights.items(), key=lambda pair: (-pair[1], pair[0]))
+        ),
+        top_regime_selected_lengths=tuple(top_regime_selected_lengths),
+    )
+
+
+def print_top_prefix_restricted_optimal(
+    k: int,
+    T: int,
+    length_set: str,
+    n: int = 20,
+) -> None:
+    result = top_prefix_restricted_optimal(k, T, length_set, n=n)
+
+    print(f"Top-prefix restricted optimal, k={k}, T={T}")
+    print()
+    print(f"length set: {result.length_set_name}")
+    print(f"V_star: {result.optimal_value:.6f}")
+    print(f"V_restricted: {result.value:.6f}")
+    print(f"gap: {result.gap:.6f}")
+    print(f"gap/sqrt(T): {result.normalized_gap:.6f}")
+    print()
+
+    print("Selected L histogram over DP states:")
+    for length, count in result.selected_length_counts[:n]:
+        print(f"  {length}: {count}")
+    print()
+
+    print("Selected L histogram by restricted-policy occupancy:")
+    for length, weight in result.occupancy_selected_length_weights[:n]:
+        print(f"  {length}: {weight:.6f}")
+    print()
+
+    print("Top regimes by restricted-policy occupancy:")
+    for ptype, gaps, weight, selected_hist in result.top_regime_selected_lengths[:n]:
+        rendered = ", ".join(
+            f"{length}:{length_weight:.6f}"
+            for length, length_weight in selected_hist[:5]
+        )
+        print(f"  packet type={ptype} gaps={gaps} occupancy={weight:.6f} selected=[{rendered}]")
 
 
 def _length_parity_category(lengths: tuple[int, ...]) -> str:
@@ -3423,7 +3574,14 @@ def _build_parser() -> argparse.ArgumentParser:
     top_prefix_candidate_value_parser.add_argument("--k", type=int, required=True)
     top_prefix_candidate_value_parser.add_argument("--T", type=int, required=True)
     top_prefix_candidate_value_parser.add_argument("--policy", required=True)
+    top_prefix_candidate_value_parser.add_argument("--length-set", choices=("scale", "all"), default="scale")
     top_prefix_candidate_value_parser.add_argument("-n", type=int, default=20)
+
+    top_prefix_restricted_optimal_parser = subparsers.add_parser("top-prefix-restricted-optimal")
+    top_prefix_restricted_optimal_parser.add_argument("--k", type=int, required=True)
+    top_prefix_restricted_optimal_parser.add_argument("--T", type=int, required=True)
+    top_prefix_restricted_optimal_parser.add_argument("--length-set", choices=("scale", "all"), default="scale")
+    top_prefix_restricted_optimal_parser.add_argument("-n", type=int, default=20)
 
     return parser
 
@@ -3594,6 +3752,15 @@ def main() -> None:
             args.k,
             args.T,
             args.policy,
+            length_set=args.length_set,
+            n=args.n,
+        )
+        return
+    if args.command == "top-prefix-restricted-optimal":
+        print_top_prefix_restricted_optimal(
+            args.k,
+            args.T,
+            args.length_set,
             n=args.n,
         )
         return
