@@ -20,6 +20,7 @@ from expert_game_lab.experiments import (
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
     print_top_prefix_length_regimes,
+    print_top_prefix_next_state_debt,
     print_top_prefix_policy_vs_oracle_labels,
     print_policy_occupancy_diff,
     print_top_prefix_scale_rows,
@@ -254,6 +255,13 @@ def test_policy_occupancy_diff_printer_runs(capsys: pytest.CaptureFixture[str]) 
 
     captured = capsys.readouterr()
     assert "total positive occupancy shift" in captured.out
+
+
+def test_top_prefix_next_state_debt_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_top_prefix_next_state_debt(3, 4, "comb", "min_valid", n=2)
+
+    captured = capsys.readouterr()
+    assert "Candidate L cleanup debt" in captured.out
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:

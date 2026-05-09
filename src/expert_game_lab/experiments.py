@@ -242,6 +242,34 @@ class PolicyOccupancyDiffRow:
     used_fallback: bool
 
 
+@dataclass(frozen=True)
+class TopPrefixNextStateDebtRow:
+    time: int
+    remaining_horizon: int
+    state: tuple[int, ...]
+    packet_type: tuple[int, ...]
+    packet_gaps: tuple[int, ...]
+    adjacent_gaps: tuple[int, ...]
+    occupancy_probability: float
+    current_valid_lengths: tuple[int, ...]
+    current_selected_length: int
+    policy_length: int
+    candidate_length: int
+    action_probability: float
+    next_state: tuple[int, ...]
+    next_packet_type: tuple[int, ...]
+    next_packet_gaps: tuple[int, ...]
+    next_adjacent_gaps: tuple[int, ...]
+    next_valid_lengths: tuple[int, ...]
+    next_selected_length: int
+    next_policy_length: int
+    next_policy_length_valid: bool
+    next_unrestricted_best_score: float
+    debt_weight: float
+    used_fallback: bool
+    next_used_fallback: bool
+
+
 def _format_action(action: tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in action)
 
@@ -2393,6 +2421,199 @@ def print_policy_occupancy_diff(
     print_rows("Top states lost by policy B by value-diff weight:", lost)
 
 
+def _candidate_scale_lengths(k: int) -> tuple[int, ...]:
+    return tuple(
+        sorted(
+            {
+                length
+                for length in (1, 3, 5, k - 3, k - 1)
+                if 1 <= length <= k - 1
+            }
+        )
+    )
+
+
+def top_prefix_next_state_debt(
+    k: int,
+    T: int,
+    policy_name: str,
+    selector: str,
+    tolerance: float = 1e-9,
+) -> list[TopPrefixNextStateDebtRow]:
+    policies = _policy_registry(k)
+    if policy_name not in policies:
+        raise ValueError(f"unknown policy: {policy_name}")
+    policy = policies[policy_name]
+    occupancy = state_occupancy(k, T, policy)
+    optimal = optimal_values(k, T)
+    candidate_lengths = _candidate_scale_lengths(k)
+    rows: list[TopPrefixNextStateDebtRow] = []
+
+    for time in range(T):
+        remaining_horizon = T - time
+        if remaining_horizon <= 1:
+            continue
+        continuation = optimal[remaining_horizon - 1]
+        next_continuation = optimal[remaining_horizon - 2] if remaining_horizon >= 2 else optimal[0]
+        for state, occupancy_probability in occupancy[time].items():
+            current_valid_lengths, used_fallback = _optimal_top_prefix_lengths(
+                k,
+                state,
+                continuation,
+                tolerance,
+            )
+            current_selected_length = _select_top_prefix_length(current_valid_lengths, selector)
+            policy_length = _top_prefix_length_from_policy(policy(state))
+            for candidate_length in candidate_lengths:
+                for action_probability, action in _balanced_top_prefix_policy(k, candidate_length):
+                    next_state = canon(tuple(state[index] + action[index] for index in range(k)))
+                    next_valid_lengths, next_used_fallback = _optimal_top_prefix_lengths(
+                        k,
+                        next_state,
+                        next_continuation,
+                        tolerance,
+                    )
+                    next_policy_length = _top_prefix_length_from_policy(policy(next_state))
+                    next_unrestricted_best_score = _unrestricted_best_score(k, next_state, next_continuation)
+                    next_policy_length_valid = next_policy_length in next_valid_lengths
+                    transition_weight = occupancy_probability * action_probability
+                    rows.append(
+                        TopPrefixNextStateDebtRow(
+                            time=time,
+                            remaining_horizon=remaining_horizon,
+                            state=state,
+                            packet_type=packet_type(state),
+                            packet_gaps=_packet_gaps(state),
+                            adjacent_gaps=_gap_vector(state),
+                            occupancy_probability=occupancy_probability,
+                            current_valid_lengths=current_valid_lengths,
+                            current_selected_length=current_selected_length,
+                            policy_length=policy_length,
+                            candidate_length=candidate_length,
+                            action_probability=action_probability,
+                            next_state=next_state,
+                            next_packet_type=packet_type(next_state),
+                            next_packet_gaps=_packet_gaps(next_state),
+                            next_adjacent_gaps=_gap_vector(next_state),
+                            next_valid_lengths=next_valid_lengths,
+                            next_selected_length=_select_top_prefix_length(next_valid_lengths, selector),
+                            next_policy_length=next_policy_length,
+                            next_policy_length_valid=next_policy_length_valid,
+                            next_unrestricted_best_score=next_unrestricted_best_score,
+                            debt_weight=0.0 if next_policy_length_valid else transition_weight * next_unrestricted_best_score,
+                            used_fallback=used_fallback,
+                            next_used_fallback=next_used_fallback,
+                        )
+                    )
+    return rows
+
+
+def print_top_prefix_next_state_debt(
+    k: int,
+    T: int,
+    policy_name: str,
+    selector: str,
+    tolerance: float = 1e-9,
+    n: int = 20,
+) -> None:
+    rows = top_prefix_next_state_debt(
+        k,
+        T,
+        policy_name,
+        selector,
+        tolerance=tolerance,
+    )
+
+    print(f"Top-prefix next-state debt, k={k}, T={T}")
+    print()
+    print(f"policy: {policy_name}")
+    print(f"selector: {selector}")
+    print(f"tolerance: {tolerance:.3g}")
+    print(f"rows: {len(rows)}")
+    print()
+
+    print("Candidate L cleanup debt by value:")
+    candidate_rows: dict[int, list[TopPrefixNextStateDebtRow]] = defaultdict(list)
+    for row in rows:
+        candidate_rows[row.candidate_length].append(row)
+    for length, items in sorted(candidate_rows.items()):
+        total_transition_mass = sum(row.occupancy_probability * row.action_probability for row in items)
+        invalid_mass = sum(
+            row.occupancy_probability * row.action_probability
+            for row in items
+            if not row.next_policy_length_valid
+        )
+        debt = sum(row.debt_weight for row in items)
+        print(
+            f"  L={length}: debt={debt:.6f}"
+            f" invalid_mass={invalid_mass:.6f}"
+            f" transition_mass={total_transition_mass:.6f}"
+        )
+    print()
+
+    grouped: dict[
+        tuple[tuple[int, ...], tuple[int, ...], int, tuple[int, ...]],
+        list[TopPrefixNextStateDebtRow],
+    ] = defaultdict(list)
+    for row in rows:
+        if row.debt_weight > 0.0:
+            grouped[
+                (
+                    row.packet_type,
+                    row.packet_gaps,
+                    row.candidate_length,
+                    row.next_packet_type,
+                )
+            ].append(row)
+
+    print("Top debt regimes by current/candidate/next packet:")
+    for (ptype, gaps, length, next_ptype), items in sorted(
+        grouped.items(),
+        key=lambda pair: (-sum(row.debt_weight for row in pair[1]), pair[0]),
+    )[:n]:
+        debt = sum(row.debt_weight for row in items)
+        transition_mass = sum(row.occupancy_probability * row.action_probability for row in items)
+        next_valid_hist = _top_weighted_histogram(
+            items,
+            lambda row: row.next_valid_lengths,
+            lambda row: row.debt_weight,
+            3,
+        )
+        next_policy_hist = _top_weighted_histogram(
+            items,
+            lambda row: row.next_policy_length,
+            lambda row: row.debt_weight,
+            3,
+        )
+        rendered_valid = ", ".join(f"{lengths}:{weight:.6f}" for lengths, weight in next_valid_hist)
+        rendered_policy = ", ".join(f"{length_value}:{weight:.6f}" for length_value, weight in next_policy_hist)
+        print(
+            f"  packet type={ptype} gaps={gaps} candidate_L={length}"
+            f" next_type={next_ptype} mass={transition_mass:.6f}"
+            f" debt={debt:.6f}"
+            f" next_policy_L=[{rendered_policy}]"
+            f" next_valid=[{rendered_valid}]"
+        )
+    print()
+
+    print("Raw top debt rows:")
+    for row in sorted(rows, key=lambda item: item.debt_weight, reverse=True)[:n]:
+        if row.debt_weight <= 0.0:
+            break
+        marker = " fallback" if row.next_used_fallback else ""
+        print(
+            f"  t={row.time:2d} rem={row.remaining_horizon:2d}"
+            f" state={row.state} ptype={row.packet_type}"
+            f" packet_gaps={row.packet_gaps} policy_L={row.policy_length}"
+            f" current_valid={row.current_valid_lengths}"
+            f" candidate_L={row.candidate_length}"
+            f" next={row.next_state} next_ptype={row.next_packet_type}"
+            f" next_valid={row.next_valid_lengths}"
+            f" next_policy_L={row.next_policy_length}"
+            f" debt={row.debt_weight:.6f}{marker}"
+        )
+
+
 def _length_parity_category(lengths: tuple[int, ...]) -> str:
     has_odd = any(length % 2 == 1 for length in lengths)
     has_even = any(length % 2 == 0 for length in lengths)
@@ -3022,6 +3243,18 @@ def _build_parser() -> argparse.ArgumentParser:
     policy_occupancy_diff_parser.add_argument("--tolerance", type=float, default=1e-9)
     policy_occupancy_diff_parser.add_argument("-n", type=int, default=20)
 
+    top_prefix_next_state_debt_parser = subparsers.add_parser("top-prefix-next-state-debt")
+    top_prefix_next_state_debt_parser.add_argument("--k", type=int, required=True)
+    top_prefix_next_state_debt_parser.add_argument("--T", type=int, required=True)
+    top_prefix_next_state_debt_parser.add_argument("--policy", required=True)
+    top_prefix_next_state_debt_parser.add_argument(
+        "--selector",
+        choices=("min_valid", "max_valid", "median_valid", "chase_preferred"),
+        default="min_valid",
+    )
+    top_prefix_next_state_debt_parser.add_argument("--tolerance", type=float, default=1e-9)
+    top_prefix_next_state_debt_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -3171,6 +3404,16 @@ def main() -> None:
             args.T,
             args.policy_a,
             args.policy_b,
+            args.selector,
+            tolerance=args.tolerance,
+            n=args.n,
+        )
+        return
+    if args.command == "top-prefix-next-state-debt":
+        print_top_prefix_next_state_debt(
+            args.k,
+            args.T,
+            args.policy,
             args.selector,
             tolerance=args.tolerance,
             n=args.n,
