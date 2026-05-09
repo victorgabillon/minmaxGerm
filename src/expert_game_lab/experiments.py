@@ -270,6 +270,27 @@ class TopPrefixNextStateDebtRow:
     next_used_fallback: bool
 
 
+@dataclass(frozen=True)
+class TopPrefixCandidateValueRow:
+    time: int
+    remaining_horizon: int
+    state: tuple[int, ...]
+    packet_type: tuple[int, ...]
+    packet_gaps: tuple[int, ...]
+    adjacent_gaps: tuple[int, ...]
+    occupancy_probability: float
+    policy_length: int
+    policy_value: float
+    best_length: int
+    best_value: float
+    regret: float
+    candidate_scores: tuple[tuple[int, float], ...]
+
+    @property
+    def weighted_regret(self) -> float:
+        return self.occupancy_probability * self.regret
+
+
 def _format_action(action: tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in action)
 
@@ -2614,6 +2635,149 @@ def print_top_prefix_next_state_debt(
         )
 
 
+def _candidate_top_prefix_policy_value(
+    k: int,
+    state: tuple[int, ...],
+    length: int,
+    continuation: dict[tuple[int, ...], float],
+) -> float:
+    expected_value = 0.0
+    for probability, action in _balanced_top_prefix_policy(k, length):
+        expected_value += probability * _next_state_value(state, action, continuation)
+    return expected_value - 0.5
+
+
+def top_prefix_candidate_values(
+    k: int,
+    T: int,
+    policy_name: str,
+) -> list[TopPrefixCandidateValueRow]:
+    policies = _policy_registry(k)
+    if policy_name not in policies:
+        raise ValueError(f"unknown policy: {policy_name}")
+    policy = policies[policy_name]
+    occupancy = state_occupancy(k, T, policy)
+    policy_values = evaluate_balanced_policy(k, T, policy)
+    candidate_lengths = _candidate_scale_lengths(k)
+    rows: list[TopPrefixCandidateValueRow] = []
+
+    for time in range(T):
+        remaining_horizon = T - time
+        continuation = policy_values[remaining_horizon - 1]
+        for state, occupancy_probability in occupancy[time].items():
+            policy_length = _top_prefix_length_from_policy(policy(state))
+            candidate_scores = tuple(
+                (
+                    length,
+                    _candidate_top_prefix_policy_value(k, state, length, continuation),
+                )
+                for length in candidate_lengths
+            )
+            best_length, best_value = max(
+                candidate_scores,
+                key=lambda item: (item[1], -item[0]),
+            )
+            policy_value = _candidate_top_prefix_policy_value(k, state, policy_length, continuation)
+            rows.append(
+                TopPrefixCandidateValueRow(
+                    time=time,
+                    remaining_horizon=remaining_horizon,
+                    state=state,
+                    packet_type=packet_type(state),
+                    packet_gaps=_packet_gaps(state),
+                    adjacent_gaps=_gap_vector(state),
+                    occupancy_probability=occupancy_probability,
+                    policy_length=policy_length,
+                    policy_value=policy_value,
+                    best_length=best_length,
+                    best_value=best_value,
+                    regret=max(best_value - policy_value, 0.0),
+                    candidate_scores=candidate_scores,
+                )
+            )
+    return rows
+
+
+def print_top_prefix_candidate_values(
+    k: int,
+    T: int,
+    policy_name: str,
+    n: int = 20,
+) -> None:
+    rows = top_prefix_candidate_values(k, T, policy_name)
+
+    print(f"Top-prefix candidate value, k={k}, T={T}")
+    print()
+    print(f"policy: {policy_name}")
+    print(f"rows: {len(rows)}")
+    print(f"total weighted regret: {sum(row.weighted_regret for row in rows):.6f}")
+    print()
+
+    print("Best candidate L histogram by occupancy:")
+    for length, weight in _top_weighted_histogram(rows, lambda row: row.best_length, lambda row: row.occupancy_probability, n):
+        print(f"  {length}: {weight:.6f}")
+    print()
+
+    print("Best candidate L histogram by weighted value opportunity:")
+    for length, weight in _top_weighted_histogram(rows, lambda row: row.best_length, lambda row: row.weighted_regret, n):
+        print(f"  {length}: {weight:.6f}")
+    print()
+
+    grouped: dict[tuple[tuple[int, ...], tuple[int, ...]], list[TopPrefixCandidateValueRow]] = defaultdict(list)
+    for row in rows:
+        if row.regret > 1e-12:
+            grouped[(row.packet_type, row.packet_gaps)].append(row)
+
+    print("Top regimes where policy L is not best:")
+    for (ptype, gaps), items in sorted(
+        grouped.items(),
+        key=lambda pair: (-sum(row.weighted_regret for row in pair[1]), pair[0]),
+    )[:n]:
+        regret = sum(row.weighted_regret for row in items)
+        occupancy_mass = sum(row.occupancy_probability for row in items)
+        policy_hist = _top_weighted_histogram(
+            items,
+            lambda row: row.policy_length,
+            lambda row: row.weighted_regret,
+            3,
+        )
+        best_hist = _top_weighted_histogram(
+            items,
+            lambda row: row.best_length,
+            lambda row: row.weighted_regret,
+            3,
+        )
+        rendered_policy = ", ".join(f"{length}:{weight:.6f}" for length, weight in policy_hist)
+        rendered_best = ", ".join(f"{length}:{weight:.6f}" for length, weight in best_hist)
+        print(
+            f"  packet type={ptype} gaps={gaps}"
+            f" occupancy={occupancy_mass:.6f}"
+            f" weighted_regret={regret:.6f}"
+            f" policy_L=[{rendered_policy}]"
+            f" best_L=[{rendered_best}]"
+        )
+    print()
+
+    print("Raw top regret rows:")
+    for row in sorted(rows, key=lambda item: item.weighted_regret, reverse=True)[:n]:
+        if row.weighted_regret <= 1e-12:
+            break
+        scores = ", ".join(
+            f"{length}:{score:.6f}"
+            for length, score in sorted(row.candidate_scores)
+        )
+        print(
+            f"  t={row.time:2d} rem={row.remaining_horizon:2d}"
+            f" state={row.state} ptype={row.packet_type}"
+            f" packet_gaps={row.packet_gaps} adjacent_gaps={row.adjacent_gaps}"
+            f" prob={row.occupancy_probability:.6f}"
+            f" policy_L={row.policy_length} policy_value={row.policy_value:.6f}"
+            f" best_L={row.best_length} best_value={row.best_value:.6f}"
+            f" weighted_regret={row.weighted_regret:.6f}"
+            f" scores=[{scores}]"
+        )
+
+
 def _length_parity_category(lengths: tuple[int, ...]) -> str:
     has_odd = any(length % 2 == 1 for length in lengths)
     has_even = any(length % 2 == 0 for length in lengths)
@@ -3255,6 +3419,12 @@ def _build_parser() -> argparse.ArgumentParser:
     top_prefix_next_state_debt_parser.add_argument("--tolerance", type=float, default=1e-9)
     top_prefix_next_state_debt_parser.add_argument("-n", type=int, default=20)
 
+    top_prefix_candidate_value_parser = subparsers.add_parser("top-prefix-candidate-value")
+    top_prefix_candidate_value_parser.add_argument("--k", type=int, required=True)
+    top_prefix_candidate_value_parser.add_argument("--T", type=int, required=True)
+    top_prefix_candidate_value_parser.add_argument("--policy", required=True)
+    top_prefix_candidate_value_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -3416,6 +3586,14 @@ def main() -> None:
             args.policy,
             args.selector,
             tolerance=args.tolerance,
+            n=args.n,
+        )
+        return
+    if args.command == "top-prefix-candidate-value":
+        print_top_prefix_candidate_values(
+            args.k,
+            args.T,
+            args.policy,
             n=args.n,
         )
         return

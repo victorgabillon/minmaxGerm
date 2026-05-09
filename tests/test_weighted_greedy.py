@@ -23,6 +23,7 @@ from expert_game_lab.experiments import (
     print_top_prefix_next_state_debt,
     print_top_prefix_policy_vs_oracle_labels,
     print_policy_occupancy_diff,
+    print_top_prefix_candidate_values,
     print_top_prefix_scale_rows,
     print_top_prefix_valid_length_structure,
     top_prefix_oracle_labels,
@@ -262,6 +263,13 @@ def test_top_prefix_next_state_debt_printer_runs(capsys: pytest.CaptureFixture[s
 
     captured = capsys.readouterr()
     assert "Candidate L cleanup debt" in captured.out
+
+
+def test_top_prefix_candidate_values_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_top_prefix_candidate_values(3, 4, "comb", n=2)
+
+    captured = capsys.readouterr()
+    assert "total weighted regret" in captured.out
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:
