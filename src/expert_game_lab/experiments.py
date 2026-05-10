@@ -9,7 +9,7 @@ from .actions import all_actions, comb_action, complement, fixed_rank_action
 from .defects import commutation_defect, commutation_defect_mixed, greedy_defect
 from .dp_optimal import optimal_values
 from .dp_policy import evaluate_balanced_policy, state_occupancy
-from .lp_game import solve_minimax_step
+from .lp_game import solve_adversary_dual, solve_minimax_step
 from .policies import (
     comb_policy,
     fixed_rank_policy,
@@ -339,6 +339,23 @@ class LibraryLPRestrictedOptimalResult:
     normalized_gap: float
     active_action_counts: tuple[tuple[str, int], ...]
     active_edge_signature_counts: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True)
+class LibraryLPDualInspectRow:
+    time: int
+    remaining_horizon: int
+    state: tuple[int, ...]
+    packet_type: tuple[int, ...]
+    packet_gaps: tuple[int, ...]
+    adjacent_gaps: tuple[int, ...]
+    occupancy_probability: float
+    value: float
+    learner_distribution: tuple[float, ...]
+    dual_value: float
+    expected_action: tuple[float, ...]
+    max_expected_action: float
+    support: tuple[tuple[float, tuple[int, ...], tuple[int, ...]], ...]
 
 
 def _format_action(action: tuple[int, ...]) -> str:
@@ -3254,6 +3271,197 @@ def print_library_lp_restricted_optimal(
         print(f"  {signature}: {count}")
 
 
+def _library_lp_value_layers(
+    k: int,
+    T: int,
+    library_actions: tuple[tuple[int, ...], ...],
+) -> list[dict[tuple[int, ...], float]]:
+    state_layers = [tuple(all_states(k, used)) for used in range(T + 1)]
+    values: list[dict[tuple[int, ...], float]] = [
+        {state: float(max(state, default=0)) for state in state_layers[T]}
+    ]
+
+    for horizon in range(1, T + 1):
+        previous = values[horizon - 1]
+        current: dict[tuple[int, ...], float] = {}
+        for state in state_layers[T - horizon]:
+            q_by_action = {
+                action: _next_state_value(state, action, previous)
+                for action in library_actions
+            }
+            solution = solve_minimax_step(q_by_action, k)
+            if not solution.success:
+                raise RuntimeError(f"LP failed at state {state}: {solution.message}")
+            current[state] = solution.value
+        values.append(current)
+
+    return values
+
+
+def library_lp_dual_inspect_rows(
+    k: int,
+    T: int,
+    library_name: str,
+    packet_type_filter: tuple[int, ...] | None = None,
+    packet_gaps_filter: tuple[int, ...] | None = None,
+    support_tolerance: float = 1e-8,
+) -> tuple[tuple[dict[tuple[int, ...], float], ...], list[LibraryLPDualInspectRow]]:
+    if T < 0:
+        raise ValueError("T must be nonnegative")
+    if k < 1:
+        raise ValueError("k must be positive")
+
+    library_actions = _action_library(k, library_name, T=T)
+    values = _library_lp_value_layers(k, T, library_actions)
+    zero = tuple(0 for _ in range(k))
+    occupancy: list[defaultdict[tuple[int, ...], float]] = [defaultdict(float) for _ in range(T + 1)]
+    occupancy[0][zero] = 1.0
+    rows: list[LibraryLPDualInspectRow] = []
+
+    for time in range(T):
+        remaining_horizon = T - time
+        continuation = values[remaining_horizon - 1]
+        for state, probability in tuple(occupancy[time].items()):
+            q_by_action = {
+                action: _next_state_value(state, action, continuation)
+                for action in library_actions
+            }
+            primal = solve_minimax_step(q_by_action, k)
+            if not primal.success:
+                raise RuntimeError(f"primal LP failed at state {state}: {primal.message}")
+            dual = solve_adversary_dual(q_by_action, k)
+            if not dual.success:
+                raise RuntimeError(f"dual LP failed at state {state}: {dual.message}")
+
+            support = tuple(
+                sorted(
+                    (
+                        (weight, action, _edge_signature(action))
+                        for action, weight in dual.weights_by_action
+                        if weight >= support_tolerance
+                    ),
+                    key=lambda item: (-item[0], _format_action(item[1])),
+                )
+            )
+            ptype = packet_type(state)
+            gaps = _packet_gaps(state)
+            if (
+                (packet_type_filter is None or ptype == packet_type_filter)
+                and (packet_gaps_filter is None or gaps == packet_gaps_filter)
+            ):
+                rows.append(
+                    LibraryLPDualInspectRow(
+                        time=time,
+                        remaining_horizon=remaining_horizon,
+                        state=state,
+                        packet_type=ptype,
+                        packet_gaps=gaps,
+                        adjacent_gaps=_gap_vector(state),
+                        occupancy_probability=probability,
+                        value=values[remaining_horizon][state],
+                        learner_distribution=primal.p,
+                        dual_value=dual.value,
+                        expected_action=dual.expected_action,
+                        max_expected_action=dual.max_expected_action,
+                        support=support,
+                    )
+                )
+
+            for action, weight in dual.weights_by_action:
+                if weight < support_tolerance:
+                    continue
+                next_state = canon(tuple(state[index] + action[index] for index in range(k)))
+                occupancy[time + 1][next_state] += probability * weight
+
+    return tuple(dict(layer) for layer in occupancy), rows
+
+
+def print_library_lp_dual_inspect(
+    k: int,
+    T: int,
+    library_name: str,
+    packet_type_filter: tuple[int, ...] | None = None,
+    packet_gaps_filter: tuple[int, ...] | None = None,
+    support_tolerance: float = 1e-8,
+    support_n: int = 12,
+    n: int = 20,
+) -> None:
+    library_actions = _action_library(k, library_name, T=T)
+    occupancy, rows = library_lp_dual_inspect_rows(
+        k,
+        T,
+        library_name,
+        packet_type_filter=packet_type_filter,
+        packet_gaps_filter=packet_gaps_filter,
+        support_tolerance=support_tolerance,
+    )
+    zero = tuple(0 for _ in range(k))
+    values = _library_lp_value_layers(k, T, library_actions)
+    restricted_value = values[T][zero]
+    optimal_value = optimal_values(k, T)[T][zero]
+    gap = optimal_value - restricted_value
+
+    print(f"Library LP dual inspect, k={k}, T={T}")
+    print()
+    print(f"library: {library_name}")
+    print(f"library size: {len(library_actions)}")
+    print(f"support tolerance: {support_tolerance:.3g}")
+    print(f"packet type filter: {packet_type_filter}")
+    print(f"packet gaps filter: {packet_gaps_filter}")
+    print(f"V_star: {optimal_value:.6f}")
+    print(f"V_restricted: {restricted_value:.6f}")
+    print(f"gap: {gap:.6f}")
+    print(f"total occupancy mass: {sum(sum(layer.values()) for layer in occupancy[:-1]):.6f}")
+    print(f"matching rows: {len(rows)}")
+    print()
+
+    regime_weights: dict[tuple[tuple[int, ...], tuple[int, ...]], float] = defaultdict(float)
+    regime_support_weights: dict[
+        tuple[tuple[int, ...], tuple[int, ...]],
+        dict[str, float],
+    ] = defaultdict(lambda: defaultdict(float))
+    for row in rows:
+        regime_key = (row.packet_type, row.packet_gaps)
+        regime_weights[regime_key] += row.occupancy_probability
+        for weight, _, signature in row.support:
+            regime_support_weights[regime_key][_format_edge_signature(signature)] += (
+                row.occupancy_probability * weight
+            )
+
+    print("Top regimes by restricted-LP occupancy:")
+    for (ptype, gaps), weight in sorted(regime_weights.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
+        support_hist = sorted(
+            regime_support_weights[(ptype, gaps)].items(),
+            key=lambda pair: (-pair[1], pair[0]),
+        )[:5]
+        rendered = ", ".join(f"{signature}:{signature_weight:.6f}" for signature, signature_weight in support_hist)
+        print(f"  packet type={ptype} gaps={gaps} occupancy={weight:.6f} support=[{rendered}]")
+    print()
+
+    print("Raw top rows by occupancy:")
+    for row in sorted(rows, key=lambda item: (-item.occupancy_probability, item.time, item.state))[:n]:
+        learner = "(" + ", ".join(f"{value:.3f}" for value in row.learner_distribution) + ")"
+        expected = "(" + ", ".join(f"{value:.3f}" for value in row.expected_action) + ")"
+        print(
+            f"t={row.time:2d} rem={row.remaining_horizon:2d}"
+            f" state={row.state} ptype={row.packet_type} gaps={row.packet_gaps}"
+            f" adjacent={row.adjacent_gaps} occ={row.occupancy_probability:.6f}"
+            f" value={row.value:.6f} dual={row.dual_value:.6f}"
+        )
+        print(f"  learner p={learner}")
+        print(f"  expected action={expected} max={row.max_expected_action:.6f}")
+        print("  adversary dual support:")
+        for weight, action, signature in row.support[:support_n]:
+            print(
+                f"    {_format_action(action)}"
+                f" edge={_format_edge_signature(signature)}"
+                f" weight={weight:.6f}"
+            )
+        if len(row.support) > support_n:
+            print(f"    ... {len(row.support) - support_n} more")
+        print()
+
+
 def _length_parity_category(lengths: tuple[int, ...]) -> str:
     has_odd = any(length % 2 == 1 for length in lengths)
     has_even = any(length % 2 == 0 for length in lengths)
@@ -3924,6 +4132,16 @@ def _build_parser() -> argparse.ArgumentParser:
     library_lp_restricted_optimal_parser.add_argument("--library", required=True)
     library_lp_restricted_optimal_parser.add_argument("-n", type=int, default=20)
 
+    library_lp_dual_inspect_parser = subparsers.add_parser("library-lp-dual-inspect")
+    library_lp_dual_inspect_parser.add_argument("--k", type=int, required=True)
+    library_lp_dual_inspect_parser.add_argument("--T", type=int, required=True)
+    library_lp_dual_inspect_parser.add_argument("--library", required=True)
+    library_lp_dual_inspect_parser.add_argument("--packet-type")
+    library_lp_dual_inspect_parser.add_argument("--packet-gaps")
+    library_lp_dual_inspect_parser.add_argument("--support-tolerance", type=float, default=1e-8)
+    library_lp_dual_inspect_parser.add_argument("--support-n", type=int, default=12)
+    library_lp_dual_inspect_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -4125,6 +4343,18 @@ def main() -> None:
             args.k,
             args.T,
             args.library,
+            n=args.n,
+        )
+        return
+    if args.command == "library-lp-dual-inspect":
+        print_library_lp_dual_inspect(
+            args.k,
+            args.T,
+            args.library,
+            packet_type_filter=_parse_int_tuple(args.packet_type) if args.packet_type else None,
+            packet_gaps_filter=_parse_int_tuple(args.packet_gaps) if args.packet_gaps else None,
+            support_tolerance=args.support_tolerance,
+            support_n=args.support_n,
             n=args.n,
         )
         return

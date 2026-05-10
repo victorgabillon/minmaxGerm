@@ -25,6 +25,7 @@ from expert_game_lab.experiments import (
     print_one_run_restricted_optimal,
     print_edge_run_restricted_optimal,
     print_library_lp_restricted_optimal,
+    print_library_lp_dual_inspect,
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
     print_top_prefix_length_regimes,
@@ -360,6 +361,14 @@ def test_library_lp_restricted_optimal_printer_runs(capsys: pytest.CaptureFixtur
 
     captured = capsys.readouterr()
     assert "Library LP restricted optimal" in captured.out
+
+
+def test_library_lp_dual_inspect_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_library_lp_dual_inspect(3, 4, "two_run", support_n=2, n=2)
+
+    captured = capsys.readouterr()
+    assert "Library LP dual inspect" in captured.out
+    assert "adversary dual support" in captured.out
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:
