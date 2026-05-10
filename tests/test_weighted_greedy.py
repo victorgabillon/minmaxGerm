@@ -16,6 +16,7 @@ from expert_game_lab.experiments import (
     _top_prefix_length_from_policy,
     evaluate_top_prefix_oracle,
     filter_weighted_greedy_contributions,
+    k3_motif_sweep,
     library_oracle,
     library_lp_restricted_optimal,
     one_run_tie_analysis,
@@ -26,6 +27,9 @@ from expert_game_lab.experiments import (
     print_edge_run_restricted_optimal,
     print_library_lp_restricted_optimal,
     print_library_lp_dual_inspect,
+    print_library_lp_dual_orbit_completion,
+    print_library_lp_dual_orbits,
+    print_k3_motif_sweep,
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
     print_top_prefix_length_regimes,
@@ -369,6 +373,38 @@ def test_library_lp_dual_inspect_printer_runs(capsys: pytest.CaptureFixture[str]
     captured = capsys.readouterr()
     assert "Library LP dual inspect" in captured.out
     assert "adversary dual support" in captured.out
+
+
+def test_library_lp_dual_orbits_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_library_lp_dual_orbits(3, 4, "two_run", orbit_n=2, n=2)
+
+    captured = capsys.readouterr()
+    assert "Library LP dual support orbits" in captured.out
+    assert "support orbits" in captured.out
+
+
+def test_library_lp_dual_orbit_completion_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_library_lp_dual_orbit_completion(3, 4, "two_run", orbit_n=2, n=2)
+
+    captured = capsys.readouterr()
+    assert "Library LP dual orbit completion" in captured.out
+    assert "library_compatible" in captured.out
+
+
+def test_k3_motif_sweep_runs() -> None:
+    rows = k3_motif_sweep((4, 5))
+
+    assert rows
+    assert {row.library_name for row in rows} >= {"comb", "twin_comb", "comb_twin", "all_three"}
+    assert all(row.lp_value <= row.optimal_value + 1e-9 for row in rows)
+
+
+def test_k3_motif_sweep_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k3_motif_sweep((4,))
+
+    captured = capsys.readouterr()
+    assert "k=3 motif sweep" in captured.out
+    assert "comb_twin" in captured.out
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:

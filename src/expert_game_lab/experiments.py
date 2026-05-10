@@ -4,6 +4,7 @@ import argparse
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import combinations
+from math import comb
 
 from .actions import all_actions, comb_action, complement, fixed_rank_action
 from .defects import commutation_defect, commutation_defect_mixed, greedy_defect
@@ -342,6 +343,26 @@ class LibraryLPRestrictedOptimalResult:
 
 
 @dataclass(frozen=True)
+class K3MotifSweepRow:
+    T: int
+    library_name: str
+    library_size: int
+    deterministic_value: float | None
+    lp_value: float
+    optimal_value: float
+
+    @property
+    def deterministic_gap(self) -> float | None:
+        if self.deterministic_value is None:
+            return None
+        return self.optimal_value - self.deterministic_value
+
+    @property
+    def lp_gap(self) -> float:
+        return self.optimal_value - self.lp_value
+
+
+@dataclass(frozen=True)
 class LibraryLPDualInspectRow:
     time: int
     remaining_horizon: int
@@ -356,6 +377,21 @@ class LibraryLPDualInspectRow:
     expected_action: tuple[float, ...]
     max_expected_action: float
     support: tuple[tuple[float, tuple[int, ...], tuple[int, ...]], ...]
+
+
+@dataclass(frozen=True)
+class DualSupportOrbitSummary:
+    orbit_key: tuple[int, ...]
+    packet_sizes: tuple[int, ...]
+    orbit_size: int
+    support_count: int
+    total_weight: float
+    representative_action: tuple[int, ...]
+    representative_edge_signature: tuple[int, ...]
+    support_weights: tuple[float, ...]
+    expected_action_contribution: tuple[float, ...]
+    packet_expected_averages: tuple[float, ...]
+    successor_packet_type_weights: tuple[tuple[tuple[int, ...], float], ...]
 
 
 def _format_action(action: tuple[int, ...]) -> str:
@@ -3462,6 +3498,376 @@ def print_library_lp_dual_inspect(
         print()
 
 
+def _packet_index_groups(state: tuple[int, ...]) -> tuple[tuple[int, ...], ...]:
+    if not state:
+        return ()
+    groups: list[list[int]] = [[0]]
+    for index in range(1, len(state)):
+        if state[index] == state[index - 1]:
+            groups[-1].append(index)
+        else:
+            groups.append([index])
+    return tuple(tuple(group) for group in groups)
+
+
+def _orbit_key_for_action(
+    action: tuple[int, ...],
+    groups: tuple[tuple[int, ...], ...],
+) -> tuple[int, ...]:
+    return tuple(sum(action[index] for index in group) for group in groups)
+
+
+def _orbit_size(
+    orbit_key: tuple[int, ...],
+    packet_sizes: tuple[int, ...],
+) -> int:
+    size = 1
+    for packet_size, ones_count in zip(packet_sizes, orbit_key, strict=True):
+        size *= comb(packet_size, ones_count)
+    return size
+
+
+def _orbit_representative_action(
+    orbit_key: tuple[int, ...],
+    groups: tuple[tuple[int, ...], ...],
+    k: int,
+) -> tuple[int, ...]:
+    bits = [0] * k
+    for ones_count, group in zip(orbit_key, groups, strict=True):
+        for index in group[:ones_count]:
+            bits[index] = 1
+    return tuple(bits)
+
+
+def _summarize_dual_support_orbits(row: LibraryLPDualInspectRow) -> tuple[DualSupportOrbitSummary, ...]:
+    groups = _packet_index_groups(row.state)
+    packet_sizes = tuple(len(group) for group in groups)
+    grouped_support: dict[tuple[int, ...], list[tuple[float, tuple[int, ...]]]] = defaultdict(list)
+    for weight, action, _ in row.support:
+        grouped_support[_orbit_key_for_action(action, groups)].append((weight, action))
+
+    summaries: list[DualSupportOrbitSummary] = []
+    for orbit_key, items in grouped_support.items():
+        total_weight = sum(weight for weight, _ in items)
+        representative_action = _orbit_representative_action(orbit_key, groups, len(row.state))
+        expected_action_contribution = tuple(
+            sum(weight * action[index] for weight, action in items)
+            for index in range(len(row.state))
+        )
+        packet_expected_averages = tuple(
+            (
+                sum(expected_action_contribution[index] for index in group)
+                / (len(group) * total_weight)
+                if total_weight > 0
+                else 0.0
+            )
+            for group in groups
+        )
+        successor_weights: dict[tuple[int, ...], float] = defaultdict(float)
+        for weight, action in items:
+            next_state = canon(tuple(row.state[index] + action[index] for index in range(len(row.state))))
+            successor_weights[packet_type(next_state)] += weight
+        summaries.append(
+            DualSupportOrbitSummary(
+                orbit_key=orbit_key,
+                packet_sizes=packet_sizes,
+                orbit_size=_orbit_size(orbit_key, packet_sizes),
+                support_count=len(items),
+                total_weight=total_weight,
+                representative_action=representative_action,
+                representative_edge_signature=_edge_signature(representative_action),
+                support_weights=tuple(sorted((weight for weight, _ in items), reverse=True)),
+                expected_action_contribution=expected_action_contribution,
+                packet_expected_averages=packet_expected_averages,
+                successor_packet_type_weights=tuple(
+                    sorted(successor_weights.items(), key=lambda pair: (-pair[1], pair[0]))
+                ),
+            )
+        )
+    return tuple(sorted(summaries, key=lambda item: (-item.total_weight, item.orbit_key)))
+
+
+def _format_float_tuple(values: tuple[float, ...], precision: int = 3) -> str:
+    return "(" + ", ".join(f"{value:.{precision}f}" for value in values) + ")"
+
+
+def print_library_lp_dual_orbits(
+    k: int,
+    T: int,
+    library_name: str,
+    packet_type_filter: tuple[int, ...] | None = None,
+    packet_gaps_filter: tuple[int, ...] | None = None,
+    support_tolerance: float = 1e-8,
+    orbit_n: int = 12,
+    n: int = 10,
+) -> None:
+    _, rows = library_lp_dual_inspect_rows(
+        k,
+        T,
+        library_name,
+        packet_type_filter=packet_type_filter,
+        packet_gaps_filter=packet_gaps_filter,
+        support_tolerance=support_tolerance,
+    )
+    library_actions = _action_library(k, library_name, T=T)
+    values = _library_lp_value_layers(k, T, library_actions)
+    zero = tuple(0 for _ in range(k))
+    optimal_value = optimal_values(k, T)[T][zero]
+    restricted_value = values[T][zero]
+
+    print(f"Library LP dual support orbits, k={k}, T={T}")
+    print()
+    print(f"library: {library_name}")
+    print(f"library size: {len(library_actions)}")
+    print(f"support tolerance: {support_tolerance:.3g}")
+    print(f"packet type filter: {packet_type_filter}")
+    print(f"packet gaps filter: {packet_gaps_filter}")
+    print(f"V_star: {optimal_value:.6f}")
+    print(f"V_restricted: {restricted_value:.6f}")
+    print(f"gap: {optimal_value - restricted_value:.6f}")
+    print(f"matching rows: {len(rows)}")
+    print()
+
+    for row in sorted(rows, key=lambda item: (-item.occupancy_probability, item.time, item.state))[:n]:
+        print(
+            f"t={row.time:2d} rem={row.remaining_horizon:2d}"
+            f" state={row.state} ptype={row.packet_type} gaps={row.packet_gaps}"
+            f" occ={row.occupancy_probability:.6f} support_actions={len(row.support)}"
+        )
+        print(f"  learner p={_format_float_tuple(row.learner_distribution)}")
+        print(f"  expected action={_format_float_tuple(row.expected_action)} max={row.max_expected_action:.6f}")
+        print("  support orbits:")
+        for orbit in _summarize_dual_support_orbits(row)[:orbit_n]:
+            weights = _format_float_tuple(orbit.support_weights, precision=6)
+            packet_avgs = _format_float_tuple(orbit.packet_expected_averages)
+            successors = ", ".join(
+                f"{ptype}:{weight:.6f}"
+                for ptype, weight in orbit.successor_packet_type_weights[:5]
+            )
+            print(
+                f"    key={orbit.orbit_key} packets={orbit.packet_sizes}"
+                f" weight={orbit.total_weight:.6f}"
+                f" support={orbit.support_count}/{orbit.orbit_size}"
+                f" rep={_format_action(orbit.representative_action)}"
+                f" edge={_format_edge_signature(orbit.representative_edge_signature)}"
+            )
+            print(f"      weights={weights}")
+            print(f"      packet exposure avg={packet_avgs}")
+            print(f"      successor packet types=[{successors}]")
+        print()
+
+
+def print_library_lp_dual_orbit_completion(
+    k: int,
+    T: int,
+    library_name: str,
+    packet_type_filter: tuple[int, ...] | None = None,
+    packet_gaps_filter: tuple[int, ...] | None = None,
+    support_tolerance: float = 1e-8,
+    orbit_n: int = 20,
+    n: int = 5,
+) -> None:
+    library_actions = _action_library(k, library_name, T=T)
+    _, rows = library_lp_dual_inspect_rows(
+        k,
+        T,
+        library_name,
+        packet_type_filter=packet_type_filter,
+        packet_gaps_filter=packet_gaps_filter,
+        support_tolerance=support_tolerance,
+    )
+    values = _library_lp_value_layers(k, T, library_actions)
+    zero = tuple(0 for _ in range(k))
+    optimal_value = optimal_values(k, T)[T][zero]
+    restricted_value = values[T][zero]
+
+    print(f"Library LP dual orbit completion, k={k}, T={T}")
+    print()
+    print(f"library: {library_name}")
+    print(f"library size: {len(library_actions)}")
+    print(f"support tolerance: {support_tolerance:.3g}")
+    print(f"packet type filter: {packet_type_filter}")
+    print(f"packet gaps filter: {packet_gaps_filter}")
+    print(f"V_star: {optimal_value:.6f}")
+    print(f"V_restricted: {restricted_value:.6f}")
+    print(f"gap: {optimal_value - restricted_value:.6f}")
+    print(f"matching rows: {len(rows)}")
+    print()
+
+    for row in sorted(rows, key=lambda item: (-item.occupancy_probability, item.time, item.state))[:n]:
+        groups = _packet_index_groups(row.state)
+        packet_sizes = tuple(len(group) for group in groups)
+        compatible_by_orbit: dict[tuple[int, ...], list[tuple[int, ...]]] = defaultdict(list)
+        for action in library_actions:
+            compatible_by_orbit[_orbit_key_for_action(action, groups)].append(action)
+
+        used_by_orbit: dict[tuple[int, ...], list[tuple[float, tuple[int, ...]]]] = defaultdict(list)
+        for weight, action, _ in row.support:
+            used_by_orbit[_orbit_key_for_action(action, groups)].append((weight, action))
+
+        print(
+            f"t={row.time:2d} rem={row.remaining_horizon:2d}"
+            f" state={row.state} ptype={row.packet_type} gaps={row.packet_gaps}"
+            f" occ={row.occupancy_probability:.6f}"
+        )
+        print("  orbit completion:")
+        orbit_summaries = _summarize_dual_support_orbits(row)
+        for orbit in orbit_summaries[:orbit_n]:
+            compatible_actions = compatible_by_orbit[orbit.orbit_key]
+            used_items = used_by_orbit[orbit.orbit_key]
+            used_weights = tuple(sorted((weight for weight, _ in used_items), reverse=True))
+            min_weight = min(used_weights) if used_weights else 0.0
+            max_weight = max(used_weights) if used_weights else 0.0
+            uniform_gap = max_weight - min_weight
+            expected_uniform = orbit.total_weight / len(used_weights) if used_weights else 0.0
+            compatible_signatures = {
+                _format_edge_signature(_edge_signature(action))
+                for action in compatible_actions
+            }
+            used_signatures = {
+                _format_edge_signature(_edge_signature(action))
+                for _, action in used_items
+            }
+            print(
+                f"    key={orbit.orbit_key}"
+                f" weight={orbit.total_weight:.6f}"
+                f" full={orbit.orbit_size}"
+                f" library_compatible={len(compatible_actions)}"
+                f" used={len(used_items)}"
+                f" used_all_compatible={len(used_items) == len(compatible_actions)}"
+            )
+            print(
+                f"      weights={_format_float_tuple(used_weights, precision=6)}"
+                f" expected_uniform={expected_uniform:.6f}"
+                f" uniform_gap={uniform_gap:.6f}"
+            )
+            print(
+                f"      signatures used/library="
+                f"{len(used_signatures)}/{len(compatible_signatures)}"
+            )
+        print()
+
+
+def _balanced_fixed_policy_from_action(action: tuple[int, ...]):
+    policy = ((0.5, action), (0.5, complement(action)))
+
+    def policy_fn(_state: tuple[int, ...]) -> tuple[tuple[float, tuple[int, ...]], ...]:
+        return policy
+
+    return policy_fn
+
+
+def _restricted_lp_value_for_actions(
+    k: int,
+    T: int,
+    actions: tuple[tuple[int, ...], ...],
+) -> float:
+    values = _library_lp_value_layers(k, T, actions)
+    return values[T][tuple(0 for _ in range(k))]
+
+
+def _k3_motif_libraries() -> dict[str, tuple[tuple[int, ...], ...]]:
+    motifs = {
+        "singleton": fixed_rank_action(3, {1}),
+        "twin_comb": fixed_rank_action(3, {1, 2}),
+        "comb": fixed_rank_action(3, {1, 3}),
+    }
+
+    def actions_for(names: tuple[str, ...]) -> tuple[tuple[int, ...], ...]:
+        actions: set[tuple[int, ...]] = set()
+        for name in names:
+            action = motifs[name]
+            actions.add(action)
+            actions.add(complement(action))
+        return tuple(sorted(actions, key=_format_action))
+
+    return {
+        "singleton": actions_for(("singleton",)),
+        "twin_comb": actions_for(("twin_comb",)),
+        "comb": actions_for(("comb",)),
+        "comb_twin": actions_for(("comb", "twin_comb")),
+        "singleton_comb": actions_for(("singleton", "comb")),
+        "singleton_twin": actions_for(("singleton", "twin_comb")),
+        "all_three": actions_for(("singleton", "comb", "twin_comb")),
+        "all": tuple(all_actions(3)),
+    }
+
+
+def k3_motif_sweep(T_values: tuple[int, ...]) -> tuple[K3MotifSweepRow, ...]:
+    rows: list[K3MotifSweepRow] = []
+    libraries = _k3_motif_libraries()
+    single_motif_actions = {"singleton", "twin_comb", "comb"}
+    for T in T_values:
+        optimal_value = optimal_values(3, T)[T][(0, 0, 0)]
+        for library_name, actions in libraries.items():
+            deterministic_value: float | None = None
+            if library_name in single_motif_actions:
+                base_action = max(actions, key=_format_action)
+                values = evaluate_balanced_policy(3, T, _balanced_fixed_policy_from_action(base_action))
+                deterministic_value = values[T][(0, 0, 0)]
+            lp_value = _restricted_lp_value_for_actions(3, T, actions)
+            rows.append(
+                K3MotifSweepRow(
+                    T=T,
+                    library_name=library_name,
+                    library_size=len(actions),
+                    deterministic_value=deterministic_value,
+                    lp_value=lp_value,
+                    optimal_value=optimal_value,
+                )
+            )
+    return tuple(rows)
+
+
+def _parse_T_values(text: str | None) -> tuple[int, ...]:
+    if text is None or not text.strip():
+        return (10, 20, 50, 100)
+    values = _parse_int_tuple(text)
+    if any(value <= 0 for value in values):
+        raise ValueError("T values must be positive")
+    return values
+
+
+def print_k3_motif_sweep(T_values: tuple[int, ...]) -> None:
+    rows = k3_motif_sweep(T_values)
+    print("k=3 motif sweep")
+    print()
+    print(f"T values: {T_values}")
+    print()
+    print(
+        "T    library          size  V_star      V_det       det_gap"
+        "  det_gap/sqrt(T)  V_lp        lp_gap   lp_gap/sqrt(T)"
+    )
+    for row in rows:
+        scale = row.T ** 0.5
+        if row.deterministic_value is None or row.deterministic_gap is None:
+            det_value = "    -     "
+            det_gap = "    -    "
+            det_norm = "      -       "
+        else:
+            det_value = f"{row.deterministic_value:10.6f}"
+            det_gap = f"{row.deterministic_gap:9.6f}"
+            det_norm = f"{row.deterministic_gap / scale:15.6f}"
+        print(
+            f"{row.T:3d}  {row.library_name:15s} {row.library_size:4d}"
+            f"  {row.optimal_value:10.6f} {det_value} {det_gap} {det_norm}"
+            f"  {row.lp_value:10.6f} {row.lp_gap:8.6f} {row.lp_gap / scale:15.6f}"
+        )
+    print()
+
+    print("Best LP motif family by T:")
+    by_T: dict[int, list[K3MotifSweepRow]] = defaultdict(list)
+    for row in rows:
+        by_T[row.T].append(row)
+    for T in T_values:
+        best = min(by_T[T], key=lambda row: (row.lp_gap, row.library_size, row.library_name))
+        print(
+            f"  T={T}: {best.library_name}"
+            f" lp_gap={best.lp_gap:.6f}"
+            f" lp_gap/sqrt(T)={best.lp_gap / (T ** 0.5):.6f}"
+        )
+
+
 def _length_parity_category(lengths: tuple[int, ...]) -> str:
     has_odd = any(length % 2 == 1 for length in lengths)
     has_even = any(length % 2 == 0 for length in lengths)
@@ -4142,6 +4548,33 @@ def _build_parser() -> argparse.ArgumentParser:
     library_lp_dual_inspect_parser.add_argument("--support-n", type=int, default=12)
     library_lp_dual_inspect_parser.add_argument("-n", type=int, default=20)
 
+    library_lp_dual_orbits_parser = subparsers.add_parser("library-lp-dual-orbits")
+    library_lp_dual_orbits_parser.add_argument("--k", type=int, required=True)
+    library_lp_dual_orbits_parser.add_argument("--T", type=int, required=True)
+    library_lp_dual_orbits_parser.add_argument("--library", required=True)
+    library_lp_dual_orbits_parser.add_argument("--packet-type")
+    library_lp_dual_orbits_parser.add_argument("--packet-gaps")
+    library_lp_dual_orbits_parser.add_argument("--support-tolerance", type=float, default=1e-8)
+    library_lp_dual_orbits_parser.add_argument("--orbit-n", type=int, default=12)
+    library_lp_dual_orbits_parser.add_argument("-n", type=int, default=10)
+
+    library_lp_dual_orbit_completion_parser = subparsers.add_parser("library-lp-dual-orbit-completion")
+    library_lp_dual_orbit_completion_parser.add_argument("--k", type=int, required=True)
+    library_lp_dual_orbit_completion_parser.add_argument("--T", type=int, required=True)
+    library_lp_dual_orbit_completion_parser.add_argument("--library", required=True)
+    library_lp_dual_orbit_completion_parser.add_argument("--packet-type")
+    library_lp_dual_orbit_completion_parser.add_argument("--packet-gaps")
+    library_lp_dual_orbit_completion_parser.add_argument("--support-tolerance", type=float, default=1e-8)
+    library_lp_dual_orbit_completion_parser.add_argument("--orbit-n", type=int, default=20)
+    library_lp_dual_orbit_completion_parser.add_argument("-n", type=int, default=5)
+
+    k3_motif_sweep_parser = subparsers.add_parser("k3-motif-sweep")
+    k3_motif_sweep_parser.add_argument(
+        "--T-values",
+        default="10,20,50,100",
+        help="comma-separated horizons, e.g. 10,20,50,100",
+    )
+
     return parser
 
 
@@ -4357,6 +4790,33 @@ def main() -> None:
             support_n=args.support_n,
             n=args.n,
         )
+        return
+    if args.command == "library-lp-dual-orbits":
+        print_library_lp_dual_orbits(
+            args.k,
+            args.T,
+            args.library,
+            packet_type_filter=_parse_int_tuple(args.packet_type) if args.packet_type else None,
+            packet_gaps_filter=_parse_int_tuple(args.packet_gaps) if args.packet_gaps else None,
+            support_tolerance=args.support_tolerance,
+            orbit_n=args.orbit_n,
+            n=args.n,
+        )
+        return
+    if args.command == "library-lp-dual-orbit-completion":
+        print_library_lp_dual_orbit_completion(
+            args.k,
+            args.T,
+            args.library,
+            packet_type_filter=_parse_int_tuple(args.packet_type) if args.packet_type else None,
+            packet_gaps_filter=_parse_int_tuple(args.packet_gaps) if args.packet_gaps else None,
+            support_tolerance=args.support_tolerance,
+            orbit_n=args.orbit_n,
+            n=args.n,
+        )
+        return
+    if args.command == "k3-motif-sweep":
+        print_k3_motif_sweep(_parse_T_values(args.T_values))
         return
     raise ValueError(f"unknown command: {args.command}")
 
