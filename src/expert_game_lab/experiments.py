@@ -329,6 +329,18 @@ class EdgeRunRestrictedOptimalResult:
     ]
 
 
+@dataclass(frozen=True)
+class LibraryLPRestrictedOptimalResult:
+    library_name: str
+    library_size: int
+    value: float
+    optimal_value: float
+    gap: float
+    normalized_gap: float
+    active_action_counts: tuple[tuple[str, int], ...]
+    active_edge_signature_counts: tuple[tuple[str, int], ...]
+
+
 def _format_action(action: tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in action)
 
@@ -569,6 +581,24 @@ def _action_library(
     T: int | None = None,
     top_fixed_size: int = 20,
 ) -> tuple[tuple[int, ...], ...]:
+    if library_name == "top_prefix_scale":
+        actions: set[tuple[int, ...]] = set()
+        for length in _candidate_scale_lengths(k):
+            action = _top_prefix_action(k, length)
+            actions.add(action)
+            actions.add(complement(action))
+        return tuple(sorted(actions, key=_format_action))
+    if library_name == "top_prefix_all":
+        actions = set(_prefix_one_run_action_library(k))
+        return tuple(sorted(actions, key=_format_action))
+    if library_name == "one_run":
+        return _one_run_edge_action_library(k)
+    if library_name == "two_run":
+        actions: set[tuple[int, ...]] = set()
+        for candidate in _edge_run_restricted_candidates(k, 2):
+            actions.add(candidate.action)
+            actions.add(complement(candidate.action))
+        return tuple(sorted(actions, key=_format_action))
     if library_name == "one_run_edges":
         return _one_run_edge_action_library(k)
     if library_name == "prefix_one_run":
@@ -3138,6 +3168,92 @@ def print_one_run_restricted_optimal(
     print_edge_run_restricted_optimal(k, T, 1, n=n)
 
 
+def library_lp_restricted_optimal(
+    k: int,
+    T: int,
+    library_name: str,
+    active_tolerance: float = 1e-8,
+) -> LibraryLPRestrictedOptimalResult:
+    if T < 0:
+        raise ValueError("T must be nonnegative")
+    if k < 1:
+        raise ValueError("k must be positive")
+
+    library_actions = _action_library(k, library_name, T=T)
+    state_layers = [tuple(all_states(k, used)) for used in range(T + 1)]
+    terminal_states = state_layers[T]
+    values: list[dict[tuple[int, ...], float]] = [
+        {state: float(max(state, default=0)) for state in terminal_states}
+    ]
+    active_action_counts: dict[str, int] = defaultdict(int)
+    active_edge_signature_counts: dict[str, int] = defaultdict(int)
+
+    for horizon in range(1, T + 1):
+        previous = values[horizon - 1]
+        current: dict[tuple[int, ...], float] = {}
+        for state in state_layers[T - horizon]:
+            q_by_action = {
+                action: _next_state_value(state, action, previous)
+                for action in library_actions
+            }
+            solution = solve_minimax_step(q_by_action, k)
+            if not solution.success:
+                raise RuntimeError(f"LP failed at state {state}: {solution.message}")
+            current[state] = solution.value
+            for action, q_value in q_by_action.items():
+                score = q_value - sum(solution.p[index] * action[index] for index in range(k))
+                if score >= solution.value - active_tolerance:
+                    active_action_counts[_format_action(action)] += 1
+                    active_edge_signature_counts[_format_edge_signature(_edge_signature(action))] += 1
+        values.append(current)
+
+    zero = tuple(0 for _ in range(k))
+    restricted_value = values[T][zero]
+    optimal_value = optimal_values(k, T)[T][zero]
+    gap = optimal_value - restricted_value
+    normalized_gap = gap / (T ** 0.5 if T > 0 else 1.0)
+    return LibraryLPRestrictedOptimalResult(
+        library_name=library_name,
+        library_size=len(library_actions),
+        value=restricted_value,
+        optimal_value=optimal_value,
+        gap=gap,
+        normalized_gap=normalized_gap,
+        active_action_counts=tuple(sorted(active_action_counts.items(), key=lambda pair: (-pair[1], pair[0]))),
+        active_edge_signature_counts=tuple(
+            sorted(active_edge_signature_counts.items(), key=lambda pair: (-pair[1], pair[0]))
+        ),
+    )
+
+
+def print_library_lp_restricted_optimal(
+    k: int,
+    T: int,
+    library_name: str,
+    n: int = 20,
+) -> None:
+    result = library_lp_restricted_optimal(k, T, library_name)
+
+    print(f"Library LP restricted optimal, k={k}, T={T}")
+    print()
+    print(f"library: {result.library_name}")
+    print(f"library size: {result.library_size}")
+    print(f"V_star: {result.optimal_value:.6f}")
+    print(f"V_restricted: {result.value:.6f}")
+    print(f"gap: {result.gap:.6f}")
+    print(f"gap/sqrt(T): {result.normalized_gap:.6f}")
+    print()
+
+    print("Top active actions over DP states:")
+    for action, count in result.active_action_counts[:n]:
+        print(f"  {action}: {count}")
+    print()
+
+    print("Top active edge signatures over DP states:")
+    for signature, count in result.active_edge_signature_counts[:n]:
+        print(f"  {signature}: {count}")
+
+
 def _length_parity_category(lengths: tuple[int, ...]) -> str:
     has_odd = any(length % 2 == 1 for length in lengths)
     has_even = any(length % 2 == 0 for length in lengths)
@@ -3802,6 +3918,12 @@ def _build_parser() -> argparse.ArgumentParser:
     two_run_restricted_optimal_parser.add_argument("--T", type=int, required=True)
     two_run_restricted_optimal_parser.add_argument("-n", type=int, default=20)
 
+    library_lp_restricted_optimal_parser = subparsers.add_parser("library-lp-restricted-optimal")
+    library_lp_restricted_optimal_parser.add_argument("--k", type=int, required=True)
+    library_lp_restricted_optimal_parser.add_argument("--T", type=int, required=True)
+    library_lp_restricted_optimal_parser.add_argument("--library", required=True)
+    library_lp_restricted_optimal_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -3995,6 +4117,14 @@ def main() -> None:
             args.k,
             args.T,
             2,
+            n=args.n,
+        )
+        return
+    if args.command == "library-lp-restricted-optimal":
+        print_library_lp_restricted_optimal(
+            args.k,
+            args.T,
+            args.library,
             n=args.n,
         )
         return

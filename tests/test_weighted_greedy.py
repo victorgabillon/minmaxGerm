@@ -17,12 +17,14 @@ from expert_game_lab.experiments import (
     evaluate_top_prefix_oracle,
     filter_weighted_greedy_contributions,
     library_oracle,
+    library_lp_restricted_optimal,
     one_run_tie_analysis,
     one_run_restricted_optimal,
     edge_run_restricted_optimal,
     occupation_weighted_greedy_defects,
     print_one_run_restricted_optimal,
     print_edge_run_restricted_optimal,
+    print_library_lp_restricted_optimal,
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
     print_top_prefix_length_regimes,
@@ -331,6 +333,33 @@ def test_two_run_restricted_value_dominates_one_run_restricted() -> None:
     one_run_result = one_run_restricted_optimal(3, 4)
 
     assert two_run_result.value >= one_run_result.value - 1e-9
+
+
+def test_library_lp_all_matches_optimal_on_small_instance() -> None:
+    result = library_lp_restricted_optimal(3, 4, "all")
+
+    assert result.gap == pytest.approx(0.0)
+
+
+def test_library_lp_monotone_for_run_libraries() -> None:
+    one_run_result = library_lp_restricted_optimal(3, 4, "one_run")
+    two_run_result = library_lp_restricted_optimal(3, 4, "two_run")
+
+    assert two_run_result.value >= one_run_result.value - 1e-9
+
+
+def test_library_lp_one_run_dominates_deterministic_one_run_pair() -> None:
+    lp_result = library_lp_restricted_optimal(3, 4, "one_run")
+    deterministic_result = one_run_restricted_optimal(3, 4)
+
+    assert lp_result.value >= deterministic_result.value - 1e-9
+
+
+def test_library_lp_restricted_optimal_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_library_lp_restricted_optimal(3, 4, "one_run", n=2)
+
+    captured = capsys.readouterr()
+    assert "Library LP restricted optimal" in captured.out
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:
