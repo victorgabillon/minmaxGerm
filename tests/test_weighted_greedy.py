@@ -24,6 +24,7 @@ from expert_game_lab.experiments import (
     library_oracle,
     probability_matching_inspect_rows,
     probability_matching_named_inspect_rows,
+    probability_matching_named_residual_aggregates,
     library_lp_restricted_optimal,
     one_run_tie_analysis,
     one_run_restricted_optimal,
@@ -39,6 +40,7 @@ from expert_game_lab.experiments import (
     print_k9_motif_library_sweep,
     print_probability_matching_inspect,
     print_probability_matching_named_inspect,
+    print_probability_matching_named_residuals,
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
     print_top_prefix_length_regimes,
@@ -500,6 +502,29 @@ def test_probability_matching_named_inspect_printer_runs(capsys: pytest.CaptureF
     captured = capsys.readouterr()
     assert "Named probability matching inspect" in captured.out
     assert "weighted L1 error" in captured.out
+
+
+def test_probability_matching_named_residuals_are_zero_for_k3_all_three() -> None:
+    rows, canonical_aggregates, regime_aggregates = probability_matching_named_residual_aggregates(
+        3,
+        4,
+        "all_three",
+    )
+
+    assert rows
+    assert canonical_aggregates
+    assert regime_aggregates
+    assert sum(row.weighted_l1_error for row in rows) == pytest.approx(0.0)
+    assert sum(row.weighted_linf_error for row in rows) == pytest.approx(0.0)
+    assert sum(item.weighted_linf_error for item in canonical_aggregates) == pytest.approx(0.0)
+
+
+def test_probability_matching_named_residuals_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_probability_matching_named_residuals(3, 4, "all_three", n=2)
+
+    captured = capsys.readouterr()
+    assert "Named probability matching residuals" in captured.out
+    assert "Top canonical-state residual aggregates" in captured.out
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:

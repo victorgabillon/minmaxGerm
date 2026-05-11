@@ -422,6 +422,19 @@ class NamedProbabilityMatchingInspectRow:
 
 
 @dataclass(frozen=True)
+class NamedProbabilityMatchingResidualAggregate:
+    key: tuple[object, ...]
+    named_row_count: int
+    total_occupancy: float
+    weighted_l1_error: float
+    weighted_linf_error: float
+    avg_l1_error: float
+    avg_linf_error: float
+    max_linf_error: float
+    representative_row: NamedProbabilityMatchingInspectRow
+
+
+@dataclass(frozen=True)
 class LibraryLPDualInspectRow:
     time: int
     remaining_horizon: int
@@ -4711,6 +4724,224 @@ def print_probability_matching_named_inspect(
         print(f"  named winner probs={_format_float_tuple(row.winner_probabilities)}")
 
 
+def _aggregate_named_probability_matching_residuals(
+    rows: list[NamedProbabilityMatchingInspectRow],
+    key_fn,
+) -> list[NamedProbabilityMatchingResidualAggregate]:
+    grouped: dict[tuple[object, ...], list[NamedProbabilityMatchingInspectRow]] = defaultdict(list)
+    for row in rows:
+        grouped[key_fn(row)].append(row)
+
+    aggregates: list[NamedProbabilityMatchingResidualAggregate] = []
+    for key, items in grouped.items():
+        total_occupancy = sum(item.occupancy_probability for item in items)
+        weighted_l1_error = sum(item.weighted_l1_error for item in items)
+        weighted_linf_error = sum(item.weighted_linf_error for item in items)
+        representative = max(
+            items,
+            key=lambda item: (item.weighted_linf_error, item.linf_error, item.occupancy_probability),
+        )
+        aggregates.append(
+            NamedProbabilityMatchingResidualAggregate(
+                key=key,
+                named_row_count=len(items),
+                total_occupancy=total_occupancy,
+                weighted_l1_error=weighted_l1_error,
+                weighted_linf_error=weighted_linf_error,
+                avg_l1_error=weighted_l1_error / total_occupancy if total_occupancy > 0 else 0.0,
+                avg_linf_error=weighted_linf_error / total_occupancy if total_occupancy > 0 else 0.0,
+                max_linf_error=max(item.linf_error for item in items),
+                representative_row=representative,
+            )
+        )
+    return sorted(aggregates, key=lambda item: (-item.weighted_linf_error, item.key))
+
+
+def probability_matching_named_residual_aggregates(
+    k: int,
+    T: int,
+    library_name: str,
+    packet_type_filter: tuple[int, ...] | None = None,
+    packet_gaps_filter: tuple[int, ...] | None = None,
+    support_tolerance: float = 1e-8,
+) -> tuple[
+    list[NamedProbabilityMatchingInspectRow],
+    list[NamedProbabilityMatchingResidualAggregate],
+    list[NamedProbabilityMatchingResidualAggregate],
+]:
+    _, all_rows = probability_matching_named_inspect_rows(
+        k,
+        T,
+        library_name,
+        support_tolerance=support_tolerance,
+    )
+    rows = [
+        row
+        for row in all_rows
+        if (packet_type_filter is None or row.packet_type == packet_type_filter)
+        and (packet_gaps_filter is None or row.packet_gaps == packet_gaps_filter)
+    ]
+    canonical_aggregates = _aggregate_named_probability_matching_residuals(
+        rows,
+        lambda row: (
+            row.remaining_horizon,
+            row.canonical_state,
+            row.packet_type,
+            row.packet_gaps,
+        ),
+    )
+    regime_aggregates = _aggregate_named_probability_matching_residuals(
+        rows,
+        lambda row: (row.packet_type, row.packet_gaps),
+    )
+    return rows, canonical_aggregates, regime_aggregates
+
+
+def _named_residual_dual_orbit_summary(
+    row: NamedProbabilityMatchingInspectRow,
+    library_actions: tuple[tuple[int, ...], ...],
+    value_layers: list[dict[tuple[int, ...], float]],
+    support_tolerance: float,
+    orbit_n: int,
+) -> tuple[tuple[tuple[int, ...], float], ...]:
+    continuation_values = value_layers[row.remaining_horizon - 1]
+    q_by_action = {
+        action: _next_state_value(row.canonical_state, action, continuation_values)
+        for action in library_actions
+    }
+    dual = solve_adversary_dual(q_by_action, len(row.canonical_state))
+    if not dual.success:
+        raise RuntimeError(f"dual LP failed at state {row.canonical_state}: {dual.message}")
+
+    groups = _packet_index_groups(row.canonical_state)
+    orbit_weights: dict[tuple[int, ...], float] = defaultdict(float)
+    for action, weight in dual.weights_by_action:
+        if weight < support_tolerance:
+            continue
+        orbit_weights[_orbit_key_for_action(action, groups)] += weight
+    return tuple(
+        sorted(orbit_weights.items(), key=lambda item: (-item[1], item[0]))[:orbit_n]
+    )
+
+
+def _format_named_residual_difference(row: NamedProbabilityMatchingInspectRow) -> str:
+    return _format_float_tuple(
+        tuple(
+            row.lifted_learner_distribution[index] - row.winner_probabilities[index]
+            for index in range(len(row.named_state))
+        )
+    )
+
+
+def _print_named_residual_aggregate(
+    aggregate: NamedProbabilityMatchingResidualAggregate,
+    library_actions: tuple[tuple[int, ...], ...],
+    value_layers: list[dict[tuple[int, ...], float]],
+    support_tolerance: float,
+    orbit_n: int,
+) -> None:
+    row = aggregate.representative_row
+    print(
+        f"  key={aggregate.key}"
+        f" named_rows={aggregate.named_row_count}"
+        f" occ={aggregate.total_occupancy:.6f}"
+        f" weighted_l1={aggregate.weighted_l1_error:.6f}"
+        f" weighted_linf={aggregate.weighted_linf_error:.6f}"
+        f" avg_l1={aggregate.avg_l1_error:.6f}"
+        f" avg_linf={aggregate.avg_linf_error:.6f}"
+        f" max_linf={aggregate.max_linf_error:.6f}"
+    )
+    print(
+        f"    representative t={row.time:2d} rem={row.remaining_horizon:2d}"
+        f" named={row.named_state} canon={row.canonical_state}"
+        f" occ={row.occupancy_probability:.6f}"
+        f" linf={row.linf_error:.6f}"
+        f" weighted_linf={row.weighted_linf_error:.6f}"
+    )
+    print(f"    lifted learner p={_format_float_tuple(row.lifted_learner_distribution)}")
+    print(f"    named winner probs={_format_float_tuple(row.winner_probabilities)}")
+    print(f"    p - winner={_format_named_residual_difference(row)}")
+    orbit_summary = _named_residual_dual_orbit_summary(
+        row,
+        library_actions,
+        value_layers,
+        support_tolerance,
+        orbit_n,
+    )
+    rendered_orbits = ", ".join(
+        f"{orbit_key}:{weight:.6f}"
+        for orbit_key, weight in orbit_summary
+    )
+    print(f"    canonical dual orbit weights=[{rendered_orbits}]")
+
+
+def print_probability_matching_named_residuals(
+    k: int,
+    T: int,
+    library_name: str,
+    packet_type_filter: tuple[int, ...] | None = None,
+    packet_gaps_filter: tuple[int, ...] | None = None,
+    support_tolerance: float = 1e-8,
+    n: int = 30,
+    orbit_n: int = 8,
+) -> None:
+    library_actions = _named_experiment_action_library(k, library_name, T)
+    value_layers = _library_lp_value_layers(k, T, library_actions)
+    rows, canonical_aggregates, regime_aggregates = probability_matching_named_residual_aggregates(
+        k,
+        T,
+        library_name,
+        packet_type_filter=packet_type_filter,
+        packet_gaps_filter=packet_gaps_filter,
+        support_tolerance=support_tolerance,
+    )
+    zero = tuple(0 for _ in range(k))
+    optimal_value = optimal_values(k, T)[T][zero]
+    restricted_value = value_layers[T][zero]
+    total_occupancy = sum(row.occupancy_probability for row in rows)
+    total_weighted_l1 = sum(row.weighted_l1_error for row in rows)
+    total_weighted_linf = sum(row.weighted_linf_error for row in rows)
+
+    print(f"Named probability matching residuals, k={k}, T={T}")
+    print()
+    print(f"library: {library_name}")
+    print(f"library size: {len(library_actions)}")
+    print(f"support tolerance: {support_tolerance:.3g}")
+    print(f"packet type filter: {packet_type_filter}")
+    print(f"packet gaps filter: {packet_gaps_filter}")
+    print(f"V_star: {optimal_value:.6f}")
+    print(f"V_restricted: {restricted_value:.6f}")
+    print(f"gap: {optimal_value - restricted_value:.6f}")
+    print(f"matching rows: {len(rows)}")
+    print(f"total occupancy: {total_occupancy:.6f}")
+    print(f"weighted L1 error: {total_weighted_l1:.6f}")
+    print(f"weighted Linf error: {total_weighted_linf:.6f}")
+    print(f"avg L1 error: {total_weighted_l1 / total_occupancy if total_occupancy > 0 else 0.0:.6f}")
+    print(f"avg Linf error: {total_weighted_linf / total_occupancy if total_occupancy > 0 else 0.0:.6f}")
+    print()
+
+    print("Top canonical-state residual aggregates:")
+    for aggregate in canonical_aggregates[:n]:
+        _print_named_residual_aggregate(
+            aggregate,
+            library_actions,
+            value_layers,
+            support_tolerance,
+            orbit_n,
+        )
+    print()
+
+    print("Top packet-regime residual aggregates:")
+    for aggregate in regime_aggregates[:n]:
+        _print_named_residual_aggregate(
+            aggregate,
+            library_actions,
+            value_layers,
+            support_tolerance,
+            orbit_n,
+        )
+
+
 def _length_parity_category(lengths: tuple[int, ...]) -> str:
     has_odd = any(length % 2 == 1 for length in lengths)
     has_even = any(length % 2 == 0 for length in lengths)
@@ -5445,6 +5676,16 @@ def _build_parser() -> argparse.ArgumentParser:
     probability_matching_named_inspect_parser.add_argument("--support-tolerance", type=float, default=1e-8)
     probability_matching_named_inspect_parser.add_argument("-n", type=int, default=20)
 
+    probability_matching_named_residuals_parser = subparsers.add_parser("probability-matching-named-residuals")
+    probability_matching_named_residuals_parser.add_argument("--k", type=int, required=True)
+    probability_matching_named_residuals_parser.add_argument("--T", type=int, required=True)
+    probability_matching_named_residuals_parser.add_argument("--library", required=True)
+    probability_matching_named_residuals_parser.add_argument("--packet-type")
+    probability_matching_named_residuals_parser.add_argument("--packet-gaps")
+    probability_matching_named_residuals_parser.add_argument("--support-tolerance", type=float, default=1e-8)
+    probability_matching_named_residuals_parser.add_argument("--orbit-n", type=int, default=8)
+    probability_matching_named_residuals_parser.add_argument("-n", type=int, default=30)
+
     return parser
 
 
@@ -5715,6 +5956,18 @@ def main() -> None:
             packet_gaps_filter=_parse_int_tuple(args.packet_gaps) if args.packet_gaps else None,
             support_tolerance=args.support_tolerance,
             n=args.n,
+        )
+        return
+    if args.command == "probability-matching-named-residuals":
+        print_probability_matching_named_residuals(
+            args.k,
+            args.T,
+            args.library,
+            packet_type_filter=_parse_int_tuple(args.packet_type) if args.packet_type else None,
+            packet_gaps_filter=_parse_int_tuple(args.packet_gaps) if args.packet_gaps else None,
+            support_tolerance=args.support_tolerance,
+            n=args.n,
+            orbit_n=args.orbit_n,
         )
         return
     raise ValueError(f"unknown command: {args.command}")
