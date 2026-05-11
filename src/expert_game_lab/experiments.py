@@ -380,6 +380,27 @@ class K9MotifLibrarySweepRow:
 
 
 @dataclass(frozen=True)
+class StrategyClassBenchmarkRow:
+    k: int
+    T: int
+    library_name: str
+    library_size: int
+    value: float
+    optimal_value: float
+    gap: float
+    normalized_gap: float
+    exact: bool
+    active_action_count: int
+    active_edge_signature_count: int
+    top_active_edge_signatures: tuple[tuple[str, int], ...]
+    probability_matching_weighted_l1: float | None = None
+    probability_matching_weighted_linf: float | None = None
+    probability_matching_avg_l1: float | None = None
+    probability_matching_avg_linf: float | None = None
+    probability_matching_rows: int | None = None
+
+
+@dataclass(frozen=True)
 class ProbabilityMatchingInspectRow:
     time: int
     remaining_horizon: int
@@ -3382,6 +3403,58 @@ def library_lp_restricted_optimal(
     )
 
 
+def _library_lp_restricted_optimal_for_actions(
+    k: int,
+    T: int,
+    library_name: str,
+    library_actions: tuple[tuple[int, ...], ...],
+    optimal_value: float,
+    active_tolerance: float = 1e-8,
+) -> LibraryLPRestrictedOptimalResult:
+    state_layers = [tuple(all_states(k, used)) for used in range(T + 1)]
+    terminal_states = state_layers[T]
+    values: list[dict[tuple[int, ...], float]] = [
+        {state: float(max(state, default=0)) for state in terminal_states}
+    ]
+    active_action_counts: dict[str, int] = defaultdict(int)
+    active_edge_signature_counts: dict[str, int] = defaultdict(int)
+
+    for horizon in range(1, T + 1):
+        previous = values[horizon - 1]
+        current: dict[tuple[int, ...], float] = {}
+        for state in state_layers[T - horizon]:
+            q_by_action = {
+                action: _next_state_value(state, action, previous)
+                for action in library_actions
+            }
+            solution = solve_minimax_step(q_by_action, k)
+            if not solution.success:
+                raise RuntimeError(f"LP failed at state {state}: {solution.message}")
+            current[state] = solution.value
+            for action, q_value in q_by_action.items():
+                score = q_value - sum(solution.p[index] * action[index] for index in range(k))
+                if score >= solution.value - active_tolerance:
+                    active_action_counts[_format_action(action)] += 1
+                    active_edge_signature_counts[_format_edge_signature(_edge_signature(action))] += 1
+        values.append(current)
+
+    zero = tuple(0 for _ in range(k))
+    restricted_value = values[T][zero]
+    gap = optimal_value - restricted_value
+    return LibraryLPRestrictedOptimalResult(
+        library_name=library_name,
+        library_size=len(library_actions),
+        value=restricted_value,
+        optimal_value=optimal_value,
+        gap=gap,
+        normalized_gap=gap / (T ** 0.5 if T > 0 else 1.0),
+        active_action_counts=tuple(sorted(active_action_counts.items(), key=lambda pair: (-pair[1], pair[0]))),
+        active_edge_signature_counts=tuple(
+            sorted(active_edge_signature_counts.items(), key=lambda pair: (-pair[1], pair[0]))
+        ),
+    )
+
+
 def print_library_lp_restricted_optimal(
     k: int,
     T: int,
@@ -3994,6 +4067,197 @@ def _parse_T_values(text: str | None) -> tuple[int, ...]:
     if any(value <= 0 for value in values):
         raise ValueError("T values must be positive")
     return values
+
+
+def _parse_cases(text: str | None) -> tuple[tuple[int, int], ...]:
+    if text is None or not text.strip():
+        return ((3, 20), (3, 50), (5, 20), (6, 12), (7, 10), (8, 8), (9, 7))
+    cases: list[tuple[int, int]] = []
+    for piece in text.split(","):
+        stripped = piece.strip()
+        if not stripped:
+            continue
+        if ":" not in stripped:
+            raise ValueError(f"case must use k:T format: {stripped}")
+        k_text, T_text = stripped.split(":", 1)
+        k = int(k_text)
+        T = int(T_text)
+        if k <= 0 or T <= 0:
+            raise ValueError("case k and T must be positive")
+        cases.append((k, T))
+    return tuple(cases)
+
+
+def _parse_library_names(text: str | None) -> tuple[str, ...]:
+    if text is None or not text.strip():
+        return ("top_prefix_all", "one_run", "two_run", "local_edges", "all")
+    return tuple(piece.strip() for piece in text.split(",") if piece.strip())
+
+
+def _strategy_class_library_actions(
+    k: int,
+    T: int,
+    library_name: str,
+) -> tuple[tuple[int, ...], ...]:
+    if library_name != "all" and library_name in _k3_motif_libraries():
+        if k != 3:
+            raise ValueError(f"{library_name} is only valid for k=3")
+        return _k3_motif_libraries()[library_name]
+    return _action_library(k, library_name, T=T)
+
+
+def strategy_class_benchmark_rows(
+    cases: tuple[tuple[int, int], ...],
+    library_names: tuple[str, ...],
+    include_probability_matching: bool = False,
+    probability_matching_max_k: int = 9,
+    probability_matching_max_T: int = 7,
+    active_tolerance: float = 1e-8,
+) -> tuple[tuple[StrategyClassBenchmarkRow, ...], tuple[str, ...]]:
+    rows: list[StrategyClassBenchmarkRow] = []
+    skipped: list[str] = []
+    optimal_cache: dict[tuple[int, int], float] = {}
+
+    for k, T in cases:
+        zero = tuple(0 for _ in range(k))
+        optimal_cache[(k, T)] = optimal_values(k, T)[T][zero]
+        for library_name in library_names:
+            try:
+                actions = _strategy_class_library_actions(k, T, library_name)
+            except ValueError as error:
+                skipped.append(f"k={k} T={T} library={library_name}: {error}")
+                continue
+
+            result = _library_lp_restricted_optimal_for_actions(
+                k,
+                T,
+                library_name,
+                actions,
+                optimal_cache[(k, T)],
+                active_tolerance=active_tolerance,
+            )
+            pm_weighted_l1: float | None = None
+            pm_weighted_linf: float | None = None
+            pm_avg_l1: float | None = None
+            pm_avg_linf: float | None = None
+            pm_rows: int | None = None
+            if (
+                include_probability_matching
+                and k <= probability_matching_max_k
+                and T <= probability_matching_max_T
+            ):
+                try:
+                    _, named_rows = probability_matching_named_inspect_rows(k, T, library_name)
+                except ValueError as error:
+                    skipped.append(f"k={k} T={T} library={library_name} probability matching: {error}")
+                else:
+                    pm_rows = len(named_rows)
+                    total_occupancy = sum(row.occupancy_probability for row in named_rows)
+                    pm_weighted_l1 = sum(row.weighted_l1_error for row in named_rows)
+                    pm_weighted_linf = sum(row.weighted_linf_error for row in named_rows)
+                    pm_avg_l1 = pm_weighted_l1 / total_occupancy if total_occupancy > 0 else 0.0
+                    pm_avg_linf = pm_weighted_linf / total_occupancy if total_occupancy > 0 else 0.0
+
+            rows.append(
+                StrategyClassBenchmarkRow(
+                    k=k,
+                    T=T,
+                    library_name=library_name,
+                    library_size=result.library_size,
+                    value=result.value,
+                    optimal_value=result.optimal_value,
+                    gap=result.gap,
+                    normalized_gap=result.normalized_gap,
+                    exact=abs(result.gap) <= 1e-8,
+                    active_action_count=len(result.active_action_counts),
+                    active_edge_signature_count=len(result.active_edge_signature_counts),
+                    top_active_edge_signatures=result.active_edge_signature_counts[:10],
+                    probability_matching_weighted_l1=pm_weighted_l1,
+                    probability_matching_weighted_linf=pm_weighted_linf,
+                    probability_matching_avg_l1=pm_avg_l1,
+                    probability_matching_avg_linf=pm_avg_linf,
+                    probability_matching_rows=pm_rows,
+                )
+            )
+    return tuple(rows), tuple(skipped)
+
+
+def _format_optional_float(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.6f}"
+
+
+def print_strategy_class_benchmark(
+    cases: tuple[tuple[int, int], ...],
+    library_names: tuple[str, ...],
+    include_probability_matching: bool = False,
+    probability_matching_max_k: int = 9,
+    probability_matching_max_T: int = 7,
+    active_tolerance: float = 1e-8,
+    n: int = 20,
+) -> None:
+    print("Strategy class benchmark")
+    print()
+    print(f"cases: {cases}")
+    print(f"libraries: {library_names}")
+    print(f"include probability matching: {include_probability_matching}")
+    print(f"probability matching max k/T: {probability_matching_max_k}/{probability_matching_max_T}")
+    print()
+    print(
+        "k  T   library          size  V_star      V_restricted"
+        " gap       gap/sqrt(T) exact active_actions active_edges"
+        " pm_avg_linf pm_weighted_linf"
+    )
+    rows: list[StrategyClassBenchmarkRow] = []
+    skipped: list[str] = []
+    for case in cases:
+        case_rows, case_skipped = strategy_class_benchmark_rows(
+            (case,),
+            library_names,
+            include_probability_matching=include_probability_matching,
+            probability_matching_max_k=probability_matching_max_k,
+            probability_matching_max_T=probability_matching_max_T,
+            active_tolerance=active_tolerance,
+        )
+        skipped.extend(case_skipped)
+        for row in sorted(case_rows, key=lambda item: (item.normalized_gap, item.library_name)):
+            rows.append(row)
+            print(
+                f"{row.k:1d} {row.T:3d}  {row.library_name:15s}"
+                f" {row.library_size:5d}"
+                f" {row.optimal_value:10.6f}"
+                f" {row.value:12.6f}"
+                f" {row.gap:9.6f}"
+                f" {row.normalized_gap:12.6f}"
+                f" {str(row.exact):5s}"
+                f" {row.active_action_count:14d}"
+                f" {row.active_edge_signature_count:12d}"
+                f" {_format_optional_float(row.probability_matching_avg_linf):>12s}"
+                f" {_format_optional_float(row.probability_matching_weighted_linf):>18s}",
+                flush=True,
+            )
+    print()
+
+    if skipped:
+        print("Skipped libraries:")
+        for message in skipped:
+            print(f"  {message}")
+        print()
+
+    print("Top active edge signatures by case/library:")
+    grouped: dict[tuple[int, int], list[StrategyClassBenchmarkRow]] = defaultdict(list)
+    for row in rows:
+        grouped[(row.k, row.T)].append(row)
+    for case, case_rows in sorted(grouped.items()):
+        print(f"k={case[0]} T={case[1]}")
+        for row in sorted(case_rows, key=lambda item: (item.normalized_gap, item.library_name))[:n]:
+            rendered = ", ".join(
+                f"{signature}:{count}"
+                for signature, count in row.top_active_edge_signatures[:5]
+            )
+            print(f"  {row.library_name:15s} gap/sqrt(T)={row.normalized_gap:.6f} active_edges=[{rendered}]")
+        print()
 
 
 def print_k3_motif_sweep(T_values: tuple[int, ...]) -> None:
@@ -6063,6 +6327,23 @@ def _build_parser() -> argparse.ArgumentParser:
     probability_matching_dual_face_repair_parser.add_argument("--support-n", type=int, default=12)
     probability_matching_dual_face_repair_parser.add_argument("-n", type=int, default=20)
 
+    strategy_class_benchmark_parser = subparsers.add_parser("strategy-class-benchmark")
+    strategy_class_benchmark_parser.add_argument(
+        "--cases",
+        default="3:20,3:50,5:20,6:12,7:10,8:8,9:7",
+        help="comma-separated k:T cases, e.g. 3:20,9:7",
+    )
+    strategy_class_benchmark_parser.add_argument(
+        "--libraries",
+        default="top_prefix_all,one_run,two_run,local_edges,all",
+        help="comma-separated action-library names",
+    )
+    strategy_class_benchmark_parser.add_argument("--include-probability-matching", action="store_true")
+    strategy_class_benchmark_parser.add_argument("--probability-matching-max-k", type=int, default=9)
+    strategy_class_benchmark_parser.add_argument("--probability-matching-max-T", type=int, default=7)
+    strategy_class_benchmark_parser.add_argument("--active-tolerance", type=float, default=1e-8)
+    strategy_class_benchmark_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -6358,6 +6639,17 @@ def main() -> None:
             active_tolerance=args.active_tolerance,
             n=args.n,
             support_n=args.support_n,
+        )
+        return
+    if args.command == "strategy-class-benchmark":
+        print_strategy_class_benchmark(
+            _parse_cases(args.cases),
+            _parse_library_names(args.libraries),
+            include_probability_matching=args.include_probability_matching,
+            probability_matching_max_k=args.probability_matching_max_k,
+            probability_matching_max_T=args.probability_matching_max_T,
+            active_tolerance=args.active_tolerance,
+            n=args.n,
         )
         return
     raise ValueError(f"unknown command: {args.command}")

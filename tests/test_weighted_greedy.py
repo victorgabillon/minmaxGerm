@@ -12,6 +12,7 @@ from expert_game_lab.experiments import (
     _one_run_restricted_candidates,
     _lift_canonical_action_to_named_distribution,
     _lift_canonical_vector_to_named,
+    _parse_cases,
     _prefix_one_run_action_library,
     _prefix_plus_tail_anchor_action_library,
     _terminal_named_winner_probabilities,
@@ -43,6 +44,8 @@ from expert_game_lab.experiments import (
     print_probability_matching_named_inspect,
     print_probability_matching_named_residuals,
     probability_matching_dual_face_repair_rows,
+    print_strategy_class_benchmark,
+    strategy_class_benchmark_rows,
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
     print_top_prefix_length_regimes,
@@ -547,6 +550,45 @@ def test_probability_matching_dual_face_repair_printer_runs(capsys: pytest.Captu
     captured = capsys.readouterr()
     assert "Probability matching dual-face repair" in captured.out
     assert "Top repaired rows" in captured.out
+
+
+def test_parse_cases() -> None:
+    assert _parse_cases("3:20, 9:7") == ((3, 20), (9, 7))
+
+
+def test_strategy_class_benchmark_rows_run_for_tiny_case() -> None:
+    rows, skipped = strategy_class_benchmark_rows(
+        ((3, 4),),
+        ("top_prefix_all", "one_run", "two_run"),
+    )
+
+    assert not skipped
+    assert {row.library_name for row in rows} == {"top_prefix_all", "one_run", "two_run"}
+    assert all(row.library_size > 0 for row in rows)
+    assert all(row.value <= row.optimal_value + 1e-9 for row in rows)
+
+
+def test_strategy_class_benchmark_all_library_is_valid_beyond_k3() -> None:
+    rows, skipped = strategy_class_benchmark_rows(((4, 3),), ("all", "all_three"))
+
+    assert any(row.library_name == "all" for row in rows)
+    assert any("all_three is only valid for k=3" in message for message in skipped)
+
+
+def test_strategy_class_benchmark_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_strategy_class_benchmark(
+        ((3, 4),),
+        ("top_prefix_all", "one_run", "two_run"),
+        include_probability_matching=True,
+        probability_matching_max_k=3,
+        probability_matching_max_T=4,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "Strategy class benchmark" in captured.out
+    assert "gap/sqrt(T)" in captured.out
+    assert "pm_avg_linf" in captured.out
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:
