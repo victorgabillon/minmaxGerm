@@ -8,6 +8,7 @@ from expert_game_lab.experiments import (
     _gap_vector,
     _is_one_run,
     _edge_run_restricted_candidates,
+    _exchangeable_actions_for_orbit_key,
     _one_run_edge_action_library,
     _one_run_restricted_candidates,
     _lift_canonical_action_to_named_distribution,
@@ -44,6 +45,8 @@ from expert_game_lab.experiments import (
     print_probability_matching_named_inspect,
     print_probability_matching_named_residuals,
     probability_matching_dual_face_repair_rows,
+    explicit_policy_benchmark_rows,
+    print_explicit_policy_benchmark,
     print_strategy_class_relative_benchmark,
     print_strategy_class_benchmark,
     strategy_class_relative_benchmark_rows,
@@ -61,6 +64,7 @@ from expert_game_lab.experiments import (
     top_prefix_oracle_labels,
     top_prefix_restricted_optimal,
     top_prefix_tie_analysis,
+    two_run_orbit_mixture_v1_policy,
     weighted_top_prefix_oracle_labels,
 )
 from expert_game_lab.policies import comb_policy, packet_minimal_frontier_policy
@@ -664,6 +668,55 @@ def test_strategy_class_relative_benchmark_printer_runs(capsys: pytest.CaptureFi
     captured = capsys.readouterr()
     assert "Strategy class relative benchmark" in captured.out
     assert "gap_to_reference/sqrt(T)" in captured.out
+
+
+def test_exchangeable_actions_for_orbit_key_respects_packet_counts() -> None:
+    policy = _exchangeable_actions_for_orbit_key(
+        (1, 1, 1, 1, 0, 0, 0, 0, 0),
+        (2, 1),
+        max_runs=2,
+    )
+
+    assert policy
+    assert sum(probability for probability, _ in policy) == pytest.approx(1.0)
+    for _, action in policy:
+        assert sum(action[:4]) == 2
+        assert sum(action[4:]) == 1
+        assert sum(action) == 3
+        assert action in {candidate for _, candidate in policy}
+
+
+def test_two_run_orbit_mixture_v1_policy_returns_distribution() -> None:
+    policy = two_run_orbit_mixture_v1_policy((0,) * 9)
+
+    assert policy
+    assert sum(probability for probability, _ in policy) == pytest.approx(1.0)
+    assert all(len(action) == 9 for _, action in policy)
+
+
+def test_explicit_policy_benchmark_rows_run_without_reference_lp() -> None:
+    rows, skipped = explicit_policy_benchmark_rows(
+        ((9, 2),),
+        ("two_run_orbit_mixture_v1",),
+        include_reference=False,
+    )
+
+    assert not skipped
+    assert len(rows) == 1
+    assert rows[0].policy_name == "two_run_orbit_mixture_v1"
+    assert rows[0].reference_value is None
+
+
+def test_explicit_policy_benchmark_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_explicit_policy_benchmark(
+        ((9, 2),),
+        ("two_run_orbit_mixture_v1",),
+        include_reference=False,
+    )
+
+    captured = capsys.readouterr()
+    assert "Explicit policy benchmark" in captured.out
+    assert "two_run_orbit_mixture_v1" in captured.out
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:

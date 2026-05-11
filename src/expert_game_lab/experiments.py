@@ -4,7 +4,7 @@ import argparse
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from itertools import combinations
+from itertools import combinations, product
 from math import comb
 
 import numpy as np
@@ -415,6 +415,18 @@ class StrategyClassRelativeBenchmarkRow:
     active_action_count: int
     active_edge_signature_count: int
     top_active_edge_signatures: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True)
+class ExplicitPolicyBenchmarkRow:
+    k: int
+    T: int
+    policy_name: str
+    value: float
+    reference_library_name: str | None
+    reference_value: float | None
+    gap_to_reference: float | None
+    normalized_gap_to_reference: float | None
 
 
 @dataclass(frozen=True)
@@ -869,6 +881,126 @@ def _packet_values(state: tuple[int, ...]) -> tuple[int, ...]:
 def _packet_gaps(state: tuple[int, ...]) -> tuple[int, ...]:
     values = _packet_values(state)
     return tuple(values[index] - values[index + 1] for index in range(len(values) - 1))
+
+
+def _packet_index_groups(state: tuple[int, ...]) -> tuple[tuple[int, ...], ...]:
+    if not state:
+        return ()
+    groups: list[tuple[int, ...]] = []
+    current: list[int] = [0]
+    for index in range(1, len(state)):
+        if state[index] == state[index - 1]:
+            current.append(index)
+            continue
+        groups.append(tuple(current))
+        current = [index]
+    groups.append(tuple(current))
+    return tuple(groups)
+
+
+def _merge_policy_terms(
+    terms: list[tuple[float, tuple[int, ...]]],
+    tolerance: float = 1e-15,
+) -> tuple[tuple[float, tuple[int, ...]], ...]:
+    totals: dict[tuple[int, ...], float] = defaultdict(float)
+    for probability, action in terms:
+        if probability > tolerance:
+            totals[action] += probability
+    total_probability = sum(totals.values())
+    if total_probability <= 0:
+        raise ValueError("policy has no positive-probability actions")
+    return tuple(
+        (probability / total_probability, action)
+        for action, probability in sorted(totals.items(), key=lambda item: _format_action(item[0]))
+        if probability > tolerance
+    )
+
+
+def _exchangeable_actions_for_orbit_key(
+    state: tuple[int, ...],
+    orbit_key: tuple[int, ...],
+    max_runs: int | None = None,
+) -> tuple[tuple[float, tuple[int, ...]], ...]:
+    canonical_state = canon(state)
+    packet_groups = _packet_index_groups(canonical_state)
+    if len(orbit_key) != len(packet_groups):
+        raise ValueError(
+            f"orbit key length {len(orbit_key)} does not match packet count {len(packet_groups)}"
+        )
+
+    packet_choices: list[tuple[tuple[int, ...], ...]] = []
+    for group, ones_count in zip(packet_groups, orbit_key):
+        if ones_count < 0 or ones_count > len(group):
+            raise ValueError(f"orbit key {orbit_key} is incompatible with packet sizes {packet_type(canonical_state)}")
+        packet_choices.append(tuple(combinations(group, ones_count)))
+
+    actions: list[tuple[float, tuple[int, ...]]] = []
+    all_choices = tuple(product(*packet_choices))
+    if not all_choices:
+        return ()
+    base_probability = 1.0 / len(all_choices)
+    for choice in all_choices:
+        one_indices = {index for subset in choice for index in subset}
+        action = tuple(1 if index in one_indices else 0 for index in range(len(canonical_state)))
+        if max_runs is not None and _edge_signature_run_count(_edge_signature(action)) > max_runs:
+            continue
+        actions.append((base_probability, action))
+    if not actions:
+        return ()
+    return _merge_policy_terms(actions)
+
+
+def _exchangeable_orbit_mixture_policy(
+    state: tuple[int, ...],
+    weighted_orbit_keys: tuple[tuple[float, tuple[int, ...]], ...],
+    max_runs: int | None = 2,
+) -> tuple[tuple[float, tuple[int, ...]], ...]:
+    terms: list[tuple[float, tuple[int, ...]]] = []
+    for orbit_weight, orbit_key in weighted_orbit_keys:
+        orbit_policy = _exchangeable_actions_for_orbit_key(state, orbit_key, max_runs=max_runs)
+        if not orbit_policy and max_runs is not None:
+            orbit_policy = _exchangeable_actions_for_orbit_key(state, orbit_key, max_runs=None)
+        if not orbit_policy:
+            raise ValueError(f"orbit key {orbit_key} has no compatible actions at state {state}")
+        for action_probability, action in orbit_policy:
+            terms.append((orbit_weight * action_probability, action))
+    return _merge_policy_terms(terms)
+
+
+def two_run_orbit_mixture_v1_policy(
+    state: tuple[int, ...],
+) -> tuple[tuple[float, tuple[int, ...]], ...]:
+    canonical_state = canon(state)
+    k = len(canonical_state)
+    if k != 9:
+        return tuple((float(probability), action) for probability, action in top_prefix_three_regime_v6_policy(canonical_state))
+
+    ptype = packet_type(canonical_state)
+    weighted_orbits_by_packet_type: dict[
+        tuple[int, ...],
+        tuple[tuple[float, tuple[int, ...]], ...],
+    ] = {
+        (9,): ((1.0, (4,)),),
+        (4, 5): ((11.0 / 17.0, (2, 1)), (6.0 / 17.0, (1, 4))),
+        (5, 4): ((4.0 / 5.0, (2, 2)), (1.0 / 5.0, (2, 0))),
+        (2, 3, 4): ((6.0 / 7.0, (1, 1, 2)), (1.0 / 7.0, (0, 3, 0))),
+        (2, 5, 2): (
+            (5.0 / 11.0, (1, 2, 0)),
+            (10.0 / 33.0, (1, 2, 1)),
+            (5.0 / 33.0, (1, 2, 2)),
+            (1.0 / 11.0, (0, 5, 0)),
+        ),
+        (1, 2, 4, 2): (
+            (1.0 / 3.0, (0, 2, 0, 0)),
+            (2.0 / 9.0, (1, 0, 2, 0)),
+            (2.0 / 9.0, (1, 0, 2, 1)),
+            (2.0 / 9.0, (0, 1, 4, 0)),
+        ),
+    }
+    weighted_orbits = weighted_orbits_by_packet_type.get(ptype)
+    if weighted_orbits is None:
+        return tuple((float(probability), action) for probability, action in top_prefix_three_regime_v6_policy(canonical_state))
+    return _exchangeable_orbit_mixture_policy(canonical_state, weighted_orbits, max_runs=2)
 
 
 def _parse_int_tuple(text: str) -> tuple[int, ...]:
@@ -1714,6 +1846,7 @@ def _policy_registry(k: int) -> dict[str, object]:
         "top_prefix_three_regime_v6": top_prefix_three_regime_v6_policy,
         "top_prefix_three_regime_v7": top_prefix_three_regime_v7_policy,
         "top_prefix_tie_mimic": top_prefix_tie_mimic_policy,
+        "two_run_orbit_mixture_v1": two_run_orbit_mixture_v1_policy,
     }
     if k == 5:
         policies["chase5"] = fixed_rank_policy({1, 3})
@@ -4190,6 +4323,12 @@ def _parse_library_names(text: str | None) -> tuple[str, ...]:
     return tuple(piece.strip() for piece in text.split(",") if piece.strip())
 
 
+def _parse_policy_names(text: str | None) -> tuple[str, ...]:
+    if text is None or not text.strip():
+        return ("two_run_orbit_mixture_v1", "top_prefix_three_regime_v6", "top_prefix_three_regime_v7")
+    return tuple(piece.strip() for piece in text.split(",") if piece.strip())
+
+
 def _strategy_class_library_actions(
     k: int,
     T: int,
@@ -4559,6 +4698,163 @@ def print_strategy_class_relative_benchmark(
                 f" active_edges=[{rendered}]"
             )
         print()
+
+
+def explicit_policy_benchmark_rows(
+    cases: tuple[tuple[int, int], ...],
+    policy_names: tuple[str, ...],
+    reference_library_name: str = "two_run",
+    include_reference: bool = False,
+) -> tuple[tuple[ExplicitPolicyBenchmarkRow, ...], tuple[str, ...]]:
+    rows: list[ExplicitPolicyBenchmarkRow] = []
+    skipped: list[str] = []
+
+    for k, T in cases:
+        policies = _policy_registry(k)
+        reference_value: float | None = None
+        if include_reference:
+            state_layers = tuple(tuple(all_states(k, used)) for used in range(T + 1))
+            try:
+                reference_actions = _strategy_class_library_actions(k, T, reference_library_name)
+            except ValueError as error:
+                skipped.append(f"k={k} T={T} reference={reference_library_name}: {error}")
+            else:
+                reference_value, _, _ = _library_lp_restricted_values_for_actions(
+                    k,
+                    T,
+                    reference_actions,
+                    state_layers=state_layers,
+                    collect_active_counts=False,
+                )
+        for policy_name in policy_names:
+            if policy_name not in policies:
+                skipped.append(f"k={k} T={T} policy={policy_name}: unknown policy")
+                continue
+            values = evaluate_balanced_policy(k, T, policies[policy_name])
+            zero = tuple(0 for _ in range(k))
+            value = values[T][zero]
+            gap: float | None = None
+            normalized_gap: float | None = None
+            if reference_value is not None:
+                gap = reference_value - value
+                normalized_gap = gap / (T ** 0.5 if T > 0 else 1.0)
+            rows.append(
+                ExplicitPolicyBenchmarkRow(
+                    k=k,
+                    T=T,
+                    policy_name=policy_name,
+                    value=value,
+                    reference_library_name=reference_library_name if reference_value is not None else None,
+                    reference_value=reference_value,
+                    gap_to_reference=gap,
+                    normalized_gap_to_reference=normalized_gap,
+                )
+            )
+    return tuple(rows), tuple(skipped)
+
+
+def print_explicit_policy_benchmark(
+    cases: tuple[tuple[int, int], ...],
+    policy_names: tuple[str, ...],
+    reference_library_name: str = "two_run",
+    include_reference: bool = False,
+) -> None:
+    print("Explicit policy benchmark")
+    print()
+    print(f"cases: {cases}")
+    print(f"policies: {policy_names}")
+    print(f"reference library: {reference_library_name}")
+    print(f"include reference: {include_reference}")
+    print()
+    print(
+        "k  T   policy                      V_policy"
+        " reference       V_reference gap_to_reference gap_to_reference/sqrt(T)"
+    )
+
+    rows: list[ExplicitPolicyBenchmarkRow] = []
+    skipped: list[str] = []
+    for k, T in cases:
+        case_start = time.perf_counter()
+        print(f"# start case k={k} T={T}", flush=True)
+        policies = _policy_registry(k)
+        reference_value: float | None = None
+        if include_reference:
+            reference_start = time.perf_counter()
+            print(f"# start reference k={k} T={T} library={reference_library_name}", flush=True)
+            state_layers = tuple(tuple(all_states(k, used)) for used in range(T + 1))
+            try:
+                reference_actions = _strategy_class_library_actions(k, T, reference_library_name)
+            except ValueError as error:
+                skipped.append(f"k={k} T={T} reference={reference_library_name}: {error}")
+            else:
+                reference_value, _, _ = _library_lp_restricted_values_for_actions(
+                    k,
+                    T,
+                    reference_actions,
+                    state_layers=state_layers,
+                    collect_active_counts=False,
+                )
+            print(
+                f"# end reference k={k} T={T} library={reference_library_name}"
+                f" elapsed={time.perf_counter() - reference_start:.3f}s",
+                flush=True,
+            )
+        case_rows: list[ExplicitPolicyBenchmarkRow] = []
+        for policy_name in policy_names:
+            if policy_name not in policies:
+                skipped.append(f"k={k} T={T} policy={policy_name}: unknown policy")
+                continue
+            row_start = time.perf_counter()
+            print(f"# start row k={k} T={T} policy={policy_name}", flush=True)
+            values = evaluate_balanced_policy(k, T, policies[policy_name])
+            zero = tuple(0 for _ in range(k))
+            value = values[T][zero]
+            print(
+                f"# end row k={k} T={T} policy={policy_name}"
+                f" elapsed={time.perf_counter() - row_start:.3f}s",
+                flush=True,
+            )
+            gap: float | None = None
+            normalized_gap: float | None = None
+            if reference_value is not None:
+                gap = reference_value - value
+                normalized_gap = gap / (T ** 0.5 if T > 0 else 1.0)
+            case_rows.append(
+                ExplicitPolicyBenchmarkRow(
+                    k=k,
+                    T=T,
+                    policy_name=policy_name,
+                    value=value,
+                    reference_library_name=reference_library_name if reference_value is not None else None,
+                    reference_value=reference_value,
+                    gap_to_reference=gap,
+                    normalized_gap_to_reference=normalized_gap,
+                )
+            )
+        for row in sorted(
+            case_rows,
+            key=lambda item: (
+                float("inf") if item.normalized_gap_to_reference is None else item.normalized_gap_to_reference,
+                item.policy_name,
+            ),
+        ):
+            rows.append(row)
+            print(
+                f"{row.k:1d} {row.T:3d}  {row.policy_name:27s}"
+                f" {row.value:10.6f}"
+                f" {(row.reference_library_name or '-'):15s}"
+                f" {_format_optional_float(row.reference_value):>11s}"
+                f" {_format_optional_float(row.gap_to_reference):>16s}"
+                f" {_format_optional_float(row.normalized_gap_to_reference):>25s}",
+                flush=True,
+            )
+        print(f"# end case k={k} T={T} elapsed={time.perf_counter() - case_start:.3f}s", flush=True)
+    print()
+
+    if skipped:
+        print("Skipped policies/references:")
+        for message in skipped:
+            print(f"  {message}")
 
 
 def print_strategy_class_benchmark(
@@ -6772,6 +7068,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     strategy_class_relative_benchmark_parser.add_argument("-n", type=int, default=20)
 
+    explicit_policy_benchmark_parser = subparsers.add_parser("explicit-policy-benchmark")
+    explicit_policy_benchmark_parser.add_argument(
+        "--cases",
+        default="9:7",
+        help="comma-separated k:T cases, e.g. 9:7,5:20",
+    )
+    explicit_policy_benchmark_parser.add_argument(
+        "--policies",
+        default="two_run_orbit_mixture_v1,top_prefix_three_regime_v6,top_prefix_three_regime_v7",
+        help="comma-separated policy names",
+    )
+    explicit_policy_benchmark_parser.add_argument("--reference-library", default="two_run")
+    explicit_policy_benchmark_parser.add_argument("--include-reference", action="store_true")
+
     return parser
 
 
@@ -7089,6 +7399,14 @@ def main() -> None:
             active_tolerance=args.active_tolerance,
             collect_active_counts=not args.no_active_counts,
             n=args.n,
+        )
+        return
+    if args.command == "explicit-policy-benchmark":
+        print_explicit_policy_benchmark(
+            _parse_cases(args.cases),
+            _parse_policy_names(args.policies),
+            reference_library_name=args.reference_library,
+            include_reference=args.include_reference,
         )
         return
     raise ValueError(f"unknown command: {args.command}")
