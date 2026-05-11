@@ -568,6 +568,30 @@ def test_strategy_class_benchmark_rows_run_for_tiny_case() -> None:
     assert all(row.value <= row.optimal_value + 1e-9 for row in rows)
 
 
+def test_strategy_class_benchmark_no_active_counts_preserves_values() -> None:
+    rows_with_counts, skipped_with_counts = strategy_class_benchmark_rows(
+        ((3, 4),),
+        ("top_prefix_all", "one_run"),
+    )
+    rows_without_counts, skipped_without_counts = strategy_class_benchmark_rows(
+        ((3, 4),),
+        ("top_prefix_all", "one_run"),
+        collect_active_counts=False,
+    )
+
+    assert not skipped_with_counts
+    assert not skipped_without_counts
+    by_library_with_counts = {row.library_name: row for row in rows_with_counts}
+    by_library_without_counts = {row.library_name: row for row in rows_without_counts}
+    assert by_library_with_counts.keys() == by_library_without_counts.keys()
+    for library_name, row in by_library_with_counts.items():
+        cheap_row = by_library_without_counts[library_name]
+        assert cheap_row.value == pytest.approx(row.value)
+        assert cheap_row.gap == pytest.approx(row.gap)
+        assert cheap_row.active_action_count == -1
+        assert cheap_row.active_edge_signature_count == -1
+
+
 def test_strategy_class_benchmark_all_library_is_valid_beyond_k3() -> None:
     rows, skipped = strategy_class_benchmark_rows(((4, 3),), ("all", "all_three"))
 

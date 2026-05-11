@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import combinations
@@ -398,6 +399,16 @@ class StrategyClassBenchmarkRow:
     probability_matching_avg_l1: float | None = None
     probability_matching_avg_linf: float | None = None
     probability_matching_rows: int | None = None
+
+
+@dataclass(frozen=True)
+class _StrategyClassBenchmarkCaseCache:
+    k: int
+    T: int
+    state_layers: tuple[tuple[tuple[int, ...], ...], ...]
+    optimal_layers: list[dict[tuple[int, ...], float]]
+    optimal_value: float
+    library_actions_by_name: dict[str, tuple[tuple[int, ...], ...]]
 
 
 @dataclass(frozen=True)
@@ -3410,8 +3421,27 @@ def _library_lp_restricted_optimal_for_actions(
     library_actions: tuple[tuple[int, ...], ...],
     optimal_value: float,
     active_tolerance: float = 1e-8,
+    state_layers: tuple[tuple[tuple[int, ...], ...], ...] | None = None,
+    collect_active_counts: bool = True,
+    precomputed_values: list[dict[tuple[int, ...], float]] | None = None,
 ) -> LibraryLPRestrictedOptimalResult:
-    state_layers = [tuple(all_states(k, used)) for used in range(T + 1)]
+    if precomputed_values is not None:
+        zero = tuple(0 for _ in range(k))
+        restricted_value = precomputed_values[T][zero]
+        gap = optimal_value - restricted_value
+        return LibraryLPRestrictedOptimalResult(
+            library_name=library_name,
+            library_size=len(library_actions),
+            value=restricted_value,
+            optimal_value=optimal_value,
+            gap=gap,
+            normalized_gap=gap / (T ** 0.5 if T > 0 else 1.0),
+            active_action_counts=(),
+            active_edge_signature_counts=(),
+        )
+
+    if state_layers is None:
+        state_layers = tuple(tuple(all_states(k, used)) for used in range(T + 1))
     terminal_states = state_layers[T]
     values: list[dict[tuple[int, ...], float]] = [
         {state: float(max(state, default=0)) for state in terminal_states}
@@ -3431,11 +3461,12 @@ def _library_lp_restricted_optimal_for_actions(
             if not solution.success:
                 raise RuntimeError(f"LP failed at state {state}: {solution.message}")
             current[state] = solution.value
-            for action, q_value in q_by_action.items():
-                score = q_value - sum(solution.p[index] * action[index] for index in range(k))
-                if score >= solution.value - active_tolerance:
-                    active_action_counts[_format_action(action)] += 1
-                    active_edge_signature_counts[_format_edge_signature(_edge_signature(action))] += 1
+            if collect_active_counts:
+                for action, q_value in q_by_action.items():
+                    score = q_value - sum(solution.p[index] * action[index] for index in range(k))
+                    if score >= solution.value - active_tolerance:
+                        active_action_counts[_format_action(action)] += 1
+                        active_edge_signature_counts[_format_edge_signature(_edge_signature(action))] += 1
         values.append(current)
 
     zero = tuple(0 for _ in range(k))
@@ -4106,6 +4137,107 @@ def _strategy_class_library_actions(
     return _action_library(k, library_name, T=T)
 
 
+def _strategy_class_benchmark_case_cache(
+    k: int,
+    T: int,
+    library_names: tuple[str, ...],
+) -> tuple[_StrategyClassBenchmarkCaseCache, tuple[str, ...]]:
+    skipped: list[str] = []
+    state_layers = tuple(tuple(all_states(k, used)) for used in range(T + 1))
+    optimal_layers = optimal_values(k, T)
+    zero = tuple(0 for _ in range(k))
+    library_actions_by_name: dict[str, tuple[tuple[int, ...], ...]] = {}
+    for library_name in library_names:
+        try:
+            library_actions_by_name[library_name] = _strategy_class_library_actions(k, T, library_name)
+        except ValueError as error:
+            skipped.append(f"k={k} T={T} library={library_name}: {error}")
+    return (
+        _StrategyClassBenchmarkCaseCache(
+            k=k,
+            T=T,
+            state_layers=state_layers,
+            optimal_layers=optimal_layers,
+            optimal_value=optimal_layers[T][zero],
+            library_actions_by_name=library_actions_by_name,
+        ),
+        tuple(skipped),
+    )
+
+
+def _strategy_class_benchmark_row_for_library(
+    cache: _StrategyClassBenchmarkCaseCache,
+    library_name: str,
+    include_probability_matching: bool = False,
+    probability_matching_max_k: int = 9,
+    probability_matching_max_T: int = 7,
+    active_tolerance: float = 1e-8,
+    collect_active_counts: bool = True,
+) -> tuple[StrategyClassBenchmarkRow, tuple[str, ...]]:
+    k = cache.k
+    T = cache.T
+    skipped: list[str] = []
+    actions = cache.library_actions_by_name[library_name]
+    precomputed_values = (
+        cache.optimal_layers
+        if library_name == "all" and not collect_active_counts
+        else None
+    )
+    result = _library_lp_restricted_optimal_for_actions(
+        k,
+        T,
+        library_name,
+        actions,
+        cache.optimal_value,
+        active_tolerance=active_tolerance,
+        state_layers=cache.state_layers,
+        collect_active_counts=collect_active_counts,
+        precomputed_values=precomputed_values,
+    )
+    pm_weighted_l1: float | None = None
+    pm_weighted_linf: float | None = None
+    pm_avg_l1: float | None = None
+    pm_avg_linf: float | None = None
+    pm_rows: int | None = None
+    if (
+        include_probability_matching
+        and k <= probability_matching_max_k
+        and T <= probability_matching_max_T
+    ):
+        try:
+            _, named_rows = probability_matching_named_inspect_rows(k, T, library_name)
+        except ValueError as error:
+            skipped.append(f"k={k} T={T} library={library_name} probability matching: {error}")
+        else:
+            pm_rows = len(named_rows)
+            total_occupancy = sum(row.occupancy_probability for row in named_rows)
+            pm_weighted_l1 = sum(row.weighted_l1_error for row in named_rows)
+            pm_weighted_linf = sum(row.weighted_linf_error for row in named_rows)
+            pm_avg_l1 = pm_weighted_l1 / total_occupancy if total_occupancy > 0 else 0.0
+            pm_avg_linf = pm_weighted_linf / total_occupancy if total_occupancy > 0 else 0.0
+
+    row = StrategyClassBenchmarkRow(
+        k=k,
+        T=T,
+        library_name=library_name,
+        library_size=result.library_size,
+        value=result.value,
+        optimal_value=result.optimal_value,
+        gap=result.gap,
+        normalized_gap=result.normalized_gap,
+        exact=abs(result.gap) <= 1e-8,
+        active_action_count=len(result.active_action_counts) if collect_active_counts else -1,
+        active_edge_signature_count=len(result.active_edge_signature_counts) if collect_active_counts else -1,
+        top_active_edge_signatures=result.active_edge_signature_counts[:10] if collect_active_counts else (),
+        probability_matching_weighted_l1=pm_weighted_l1,
+        probability_matching_weighted_linf=pm_weighted_linf,
+        probability_matching_avg_l1=pm_avg_l1,
+        probability_matching_avg_linf=pm_avg_linf,
+        probability_matching_rows=pm_rows,
+    )
+    return row, tuple(skipped)
+
+
 def strategy_class_benchmark_rows(
     cases: tuple[tuple[int, int], ...],
     library_names: tuple[str, ...],
@@ -4113,72 +4245,28 @@ def strategy_class_benchmark_rows(
     probability_matching_max_k: int = 9,
     probability_matching_max_T: int = 7,
     active_tolerance: float = 1e-8,
+    collect_active_counts: bool = True,
 ) -> tuple[tuple[StrategyClassBenchmarkRow, ...], tuple[str, ...]]:
     rows: list[StrategyClassBenchmarkRow] = []
     skipped: list[str] = []
-    optimal_cache: dict[tuple[int, int], float] = {}
 
     for k, T in cases:
-        zero = tuple(0 for _ in range(k))
-        optimal_cache[(k, T)] = optimal_values(k, T)[T][zero]
+        cache, case_skipped = _strategy_class_benchmark_case_cache(k, T, library_names)
+        skipped.extend(case_skipped)
         for library_name in library_names:
-            try:
-                actions = _strategy_class_library_actions(k, T, library_name)
-            except ValueError as error:
-                skipped.append(f"k={k} T={T} library={library_name}: {error}")
+            if library_name not in cache.library_actions_by_name:
                 continue
-
-            result = _library_lp_restricted_optimal_for_actions(
-                k,
-                T,
+            row, row_skipped = _strategy_class_benchmark_row_for_library(
+                cache,
                 library_name,
-                actions,
-                optimal_cache[(k, T)],
+                include_probability_matching=include_probability_matching,
+                probability_matching_max_k=probability_matching_max_k,
+                probability_matching_max_T=probability_matching_max_T,
                 active_tolerance=active_tolerance,
+                collect_active_counts=collect_active_counts,
             )
-            pm_weighted_l1: float | None = None
-            pm_weighted_linf: float | None = None
-            pm_avg_l1: float | None = None
-            pm_avg_linf: float | None = None
-            pm_rows: int | None = None
-            if (
-                include_probability_matching
-                and k <= probability_matching_max_k
-                and T <= probability_matching_max_T
-            ):
-                try:
-                    _, named_rows = probability_matching_named_inspect_rows(k, T, library_name)
-                except ValueError as error:
-                    skipped.append(f"k={k} T={T} library={library_name} probability matching: {error}")
-                else:
-                    pm_rows = len(named_rows)
-                    total_occupancy = sum(row.occupancy_probability for row in named_rows)
-                    pm_weighted_l1 = sum(row.weighted_l1_error for row in named_rows)
-                    pm_weighted_linf = sum(row.weighted_linf_error for row in named_rows)
-                    pm_avg_l1 = pm_weighted_l1 / total_occupancy if total_occupancy > 0 else 0.0
-                    pm_avg_linf = pm_weighted_linf / total_occupancy if total_occupancy > 0 else 0.0
-
-            rows.append(
-                StrategyClassBenchmarkRow(
-                    k=k,
-                    T=T,
-                    library_name=library_name,
-                    library_size=result.library_size,
-                    value=result.value,
-                    optimal_value=result.optimal_value,
-                    gap=result.gap,
-                    normalized_gap=result.normalized_gap,
-                    exact=abs(result.gap) <= 1e-8,
-                    active_action_count=len(result.active_action_counts),
-                    active_edge_signature_count=len(result.active_edge_signature_counts),
-                    top_active_edge_signatures=result.active_edge_signature_counts[:10],
-                    probability_matching_weighted_l1=pm_weighted_l1,
-                    probability_matching_weighted_linf=pm_weighted_linf,
-                    probability_matching_avg_l1=pm_avg_l1,
-                    probability_matching_avg_linf=pm_avg_linf,
-                    probability_matching_rows=pm_rows,
-                )
-            )
+            rows.append(row)
+            skipped.extend(row_skipped)
     return tuple(rows), tuple(skipped)
 
 
@@ -4188,6 +4276,12 @@ def _format_optional_float(value: float | None) -> str:
     return f"{value:.6f}"
 
 
+def _format_optional_int(value: int) -> str:
+    if value < 0:
+        return "-"
+    return str(value)
+
+
 def print_strategy_class_benchmark(
     cases: tuple[tuple[int, int], ...],
     library_names: tuple[str, ...],
@@ -4195,6 +4289,7 @@ def print_strategy_class_benchmark(
     probability_matching_max_k: int = 9,
     probability_matching_max_T: int = 7,
     active_tolerance: float = 1e-8,
+    collect_active_counts: bool = True,
     n: int = 20,
 ) -> None:
     print("Strategy class benchmark")
@@ -4203,6 +4298,7 @@ def print_strategy_class_benchmark(
     print(f"libraries: {library_names}")
     print(f"include probability matching: {include_probability_matching}")
     print(f"probability matching max k/T: {probability_matching_max_k}/{probability_matching_max_T}")
+    print(f"active counts: {collect_active_counts}")
     print()
     print(
         "k  T   library          size  V_star      V_restricted"
@@ -4211,16 +4307,34 @@ def print_strategy_class_benchmark(
     )
     rows: list[StrategyClassBenchmarkRow] = []
     skipped: list[str] = []
-    for case in cases:
-        case_rows, case_skipped = strategy_class_benchmark_rows(
-            (case,),
-            library_names,
-            include_probability_matching=include_probability_matching,
-            probability_matching_max_k=probability_matching_max_k,
-            probability_matching_max_T=probability_matching_max_T,
-            active_tolerance=active_tolerance,
-        )
+    for k, T in cases:
+        case_start = time.perf_counter()
+        print(f"# start case k={k} T={T}", flush=True)
+        cache, case_skipped = _strategy_class_benchmark_case_cache(k, T, library_names)
+        print(f"# built case k={k} T={T} in {time.perf_counter() - case_start:.3f}s", flush=True)
         skipped.extend(case_skipped)
+        case_rows: list[StrategyClassBenchmarkRow] = []
+        for library_name in library_names:
+            if library_name not in cache.library_actions_by_name:
+                continue
+            row_start = time.perf_counter()
+            print(f"# start row k={k} T={T} library={library_name}", flush=True)
+            row, row_skipped = _strategy_class_benchmark_row_for_library(
+                cache,
+                library_name,
+                include_probability_matching=include_probability_matching,
+                probability_matching_max_k=probability_matching_max_k,
+                probability_matching_max_T=probability_matching_max_T,
+                active_tolerance=active_tolerance,
+                collect_active_counts=collect_active_counts,
+            )
+            skipped.extend(row_skipped)
+            print(
+                f"# end row k={k} T={T} library={library_name}"
+                f" elapsed={time.perf_counter() - row_start:.3f}s",
+                flush=True,
+            )
+            case_rows.append(row)
         for row in sorted(case_rows, key=lambda item: (item.normalized_gap, item.library_name)):
             rows.append(row)
             print(
@@ -4231,12 +4345,13 @@ def print_strategy_class_benchmark(
                 f" {row.gap:9.6f}"
                 f" {row.normalized_gap:12.6f}"
                 f" {str(row.exact):5s}"
-                f" {row.active_action_count:14d}"
-                f" {row.active_edge_signature_count:12d}"
+                f" {_format_optional_int(row.active_action_count):>14s}"
+                f" {_format_optional_int(row.active_edge_signature_count):>12s}"
                 f" {_format_optional_float(row.probability_matching_avg_linf):>12s}"
                 f" {_format_optional_float(row.probability_matching_weighted_linf):>18s}",
                 flush=True,
             )
+        print(f"# end case k={k} T={T} elapsed={time.perf_counter() - case_start:.3f}s", flush=True)
     print()
 
     if skipped:
@@ -4256,6 +4371,8 @@ def print_strategy_class_benchmark(
                 f"{signature}:{count}"
                 for signature, count in row.top_active_edge_signatures[:5]
             )
+            if not rendered:
+                rendered = "-"
             print(f"  {row.library_name:15s} gap/sqrt(T)={row.normalized_gap:.6f} active_edges=[{rendered}]")
         print()
 
@@ -6342,6 +6459,11 @@ def _build_parser() -> argparse.ArgumentParser:
     strategy_class_benchmark_parser.add_argument("--probability-matching-max-k", type=int, default=9)
     strategy_class_benchmark_parser.add_argument("--probability-matching-max-T", type=int, default=7)
     strategy_class_benchmark_parser.add_argument("--active-tolerance", type=float, default=1e-8)
+    strategy_class_benchmark_parser.add_argument(
+        "--no-active-counts",
+        action="store_true",
+        help="skip active action/signature counting for faster long-horizon value sweeps",
+    )
     strategy_class_benchmark_parser.add_argument("-n", type=int, default=20)
 
     return parser
@@ -6649,6 +6771,7 @@ def main() -> None:
             probability_matching_max_k=args.probability_matching_max_k,
             probability_matching_max_T=args.probability_matching_max_T,
             active_tolerance=args.active_tolerance,
+            collect_active_counts=not args.no_active_counts,
             n=args.n,
         )
         return
