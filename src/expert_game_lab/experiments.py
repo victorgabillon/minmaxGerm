@@ -402,6 +402,22 @@ class StrategyClassBenchmarkRow:
 
 
 @dataclass(frozen=True)
+class StrategyClassRelativeBenchmarkRow:
+    k: int
+    T: int
+    library_name: str
+    library_size: int
+    reference_library_name: str
+    reference_value: float
+    value: float
+    gap_to_reference: float
+    normalized_gap_to_reference: float
+    active_action_count: int
+    active_edge_signature_count: int
+    top_active_edge_signatures: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True)
 class _StrategyClassBenchmarkCaseCache:
     k: int
     T: int
@@ -3486,6 +3502,55 @@ def _library_lp_restricted_optimal_for_actions(
     )
 
 
+def _library_lp_restricted_values_for_actions(
+    k: int,
+    T: int,
+    library_actions: tuple[tuple[int, ...], ...],
+    state_layers: tuple[tuple[tuple[int, ...], ...], ...] | None = None,
+    active_tolerance: float = 1e-8,
+    collect_active_counts: bool = False,
+) -> tuple[
+    float,
+    tuple[tuple[str, int], ...],
+    tuple[tuple[str, int], ...],
+]:
+    if state_layers is None:
+        state_layers = tuple(tuple(all_states(k, used)) for used in range(T + 1))
+    terminal_states = state_layers[T]
+    values: list[dict[tuple[int, ...], float]] = [
+        {state: float(max(state, default=0)) for state in terminal_states}
+    ]
+    active_action_counts: dict[str, int] = defaultdict(int)
+    active_edge_signature_counts: dict[str, int] = defaultdict(int)
+
+    for horizon in range(1, T + 1):
+        previous = values[horizon - 1]
+        current: dict[tuple[int, ...], float] = {}
+        for state in state_layers[T - horizon]:
+            q_by_action = {
+                action: _next_state_value(state, action, previous)
+                for action in library_actions
+            }
+            solution = solve_minimax_step(q_by_action, k)
+            if not solution.success:
+                raise RuntimeError(f"LP failed at state {state}: {solution.message}")
+            current[state] = solution.value
+            if collect_active_counts:
+                for action, q_value in q_by_action.items():
+                    score = q_value - sum(solution.p[index] * action[index] for index in range(k))
+                    if score >= solution.value - active_tolerance:
+                        active_action_counts[_format_action(action)] += 1
+                        active_edge_signature_counts[_format_edge_signature(_edge_signature(action))] += 1
+        values.append(current)
+
+    zero = tuple(0 for _ in range(k))
+    return (
+        values[T][zero],
+        tuple(sorted(active_action_counts.items(), key=lambda pair: (-pair[1], pair[0]))),
+        tuple(sorted(active_edge_signature_counts.items(), key=lambda pair: (-pair[1], pair[0]))),
+    )
+
+
 def print_library_lp_restricted_optimal(
     k: int,
     T: int,
@@ -4165,6 +4230,23 @@ def _strategy_class_benchmark_case_cache(
     )
 
 
+def _strategy_class_relative_library_actions(
+    k: int,
+    T: int,
+    library_names: tuple[str, ...],
+    reference_library_name: str,
+) -> tuple[dict[str, tuple[tuple[int, ...], ...]], tuple[str, ...]]:
+    skipped: list[str] = []
+    actions_by_name: dict[str, tuple[tuple[int, ...], ...]] = {}
+    names = tuple(dict.fromkeys((*library_names, reference_library_name)))
+    for library_name in names:
+        try:
+            actions_by_name[library_name] = _strategy_class_library_actions(k, T, library_name)
+        except ValueError as error:
+            skipped.append(f"k={k} T={T} library={library_name}: {error}")
+    return actions_by_name, tuple(skipped)
+
+
 def _strategy_class_benchmark_row_for_library(
     cache: _StrategyClassBenchmarkCaseCache,
     library_name: str,
@@ -4280,6 +4362,203 @@ def _format_optional_int(value: int) -> str:
     if value < 0:
         return "-"
     return str(value)
+
+
+def strategy_class_relative_benchmark_rows(
+    cases: tuple[tuple[int, int], ...],
+    library_names: tuple[str, ...],
+    reference_library_name: str = "two_run",
+    active_tolerance: float = 1e-8,
+    collect_active_counts: bool = False,
+) -> tuple[tuple[StrategyClassRelativeBenchmarkRow, ...], tuple[str, ...]]:
+    rows: list[StrategyClassRelativeBenchmarkRow] = []
+    skipped: list[str] = []
+
+    for k, T in cases:
+        state_layers = tuple(tuple(all_states(k, used)) for used in range(T + 1))
+        actions_by_name, case_skipped = _strategy_class_relative_library_actions(
+            k,
+            T,
+            library_names,
+            reference_library_name,
+        )
+        skipped.extend(case_skipped)
+        if reference_library_name not in actions_by_name:
+            continue
+        reference_value, _, _ = _library_lp_restricted_values_for_actions(
+            k,
+            T,
+            actions_by_name[reference_library_name],
+            state_layers=state_layers,
+            active_tolerance=active_tolerance,
+            collect_active_counts=False,
+        )
+        for library_name in library_names:
+            if library_name not in actions_by_name:
+                continue
+            value, active_action_counts, active_edge_signature_counts = _library_lp_restricted_values_for_actions(
+                k,
+                T,
+                actions_by_name[library_name],
+                state_layers=state_layers,
+                active_tolerance=active_tolerance,
+                collect_active_counts=collect_active_counts,
+            )
+            gap = reference_value - value
+            rows.append(
+                StrategyClassRelativeBenchmarkRow(
+                    k=k,
+                    T=T,
+                    library_name=library_name,
+                    library_size=len(actions_by_name[library_name]),
+                    reference_library_name=reference_library_name,
+                    reference_value=reference_value,
+                    value=value,
+                    gap_to_reference=gap,
+                    normalized_gap_to_reference=gap / (T ** 0.5 if T > 0 else 1.0),
+                    active_action_count=len(active_action_counts) if collect_active_counts else -1,
+                    active_edge_signature_count=len(active_edge_signature_counts) if collect_active_counts else -1,
+                    top_active_edge_signatures=active_edge_signature_counts[:10] if collect_active_counts else (),
+                )
+            )
+    return tuple(rows), tuple(skipped)
+
+
+def print_strategy_class_relative_benchmark(
+    cases: tuple[tuple[int, int], ...],
+    library_names: tuple[str, ...],
+    reference_library_name: str = "two_run",
+    active_tolerance: float = 1e-8,
+    collect_active_counts: bool = False,
+    n: int = 20,
+) -> None:
+    print("Strategy class relative benchmark")
+    print()
+    print(f"cases: {cases}")
+    print(f"libraries: {library_names}")
+    print(f"reference library: {reference_library_name}")
+    print(f"active counts: {collect_active_counts}")
+    print()
+    print(
+        "k  T   library          size  reference       V_reference"
+        " V_library   gap_to_reference gap_to_reference/sqrt(T)"
+        " active_actions active_edges"
+    )
+
+    rows: list[StrategyClassRelativeBenchmarkRow] = []
+    skipped: list[str] = []
+    for k, T in cases:
+        case_start = time.perf_counter()
+        print(f"# start case k={k} T={T}", flush=True)
+        state_start = time.perf_counter()
+        state_layers = tuple(tuple(all_states(k, used)) for used in range(T + 1))
+        print(
+            f"# built state_layers k={k} T={T}"
+            f" layers={len(state_layers)} elapsed={time.perf_counter() - state_start:.3f}s",
+            flush=True,
+        )
+        actions_by_name, case_skipped = _strategy_class_relative_library_actions(
+            k,
+            T,
+            library_names,
+            reference_library_name,
+        )
+        skipped.extend(case_skipped)
+        if reference_library_name not in actions_by_name:
+            print(f"# missing reference library k={k} T={T} library={reference_library_name}", flush=True)
+            continue
+        reference_start = time.perf_counter()
+        print(f"# start reference k={k} T={T} library={reference_library_name}", flush=True)
+        reference_value, _, _ = _library_lp_restricted_values_for_actions(
+            k,
+            T,
+            actions_by_name[reference_library_name],
+            state_layers=state_layers,
+            active_tolerance=active_tolerance,
+            collect_active_counts=False,
+        )
+        print(
+            f"# end reference k={k} T={T} library={reference_library_name}"
+            f" elapsed={time.perf_counter() - reference_start:.3f}s",
+            flush=True,
+        )
+        case_rows: list[StrategyClassRelativeBenchmarkRow] = []
+        for library_name in library_names:
+            if library_name not in actions_by_name:
+                continue
+            row_start = time.perf_counter()
+            print(f"# start row k={k} T={T} library={library_name}", flush=True)
+            value, active_action_counts, active_edge_signature_counts = _library_lp_restricted_values_for_actions(
+                k,
+                T,
+                actions_by_name[library_name],
+                state_layers=state_layers,
+                active_tolerance=active_tolerance,
+                collect_active_counts=collect_active_counts,
+            )
+            print(
+                f"# end row k={k} T={T} library={library_name}"
+                f" elapsed={time.perf_counter() - row_start:.3f}s",
+                flush=True,
+            )
+            gap = reference_value - value
+            row = StrategyClassRelativeBenchmarkRow(
+                k=k,
+                T=T,
+                library_name=library_name,
+                library_size=len(actions_by_name[library_name]),
+                reference_library_name=reference_library_name,
+                reference_value=reference_value,
+                value=value,
+                gap_to_reference=gap,
+                normalized_gap_to_reference=gap / (T ** 0.5 if T > 0 else 1.0),
+                active_action_count=len(active_action_counts) if collect_active_counts else -1,
+                active_edge_signature_count=len(active_edge_signature_counts) if collect_active_counts else -1,
+                top_active_edge_signatures=active_edge_signature_counts[:10] if collect_active_counts else (),
+            )
+            case_rows.append(row)
+        for row in sorted(case_rows, key=lambda item: (item.normalized_gap_to_reference, item.library_name)):
+            rows.append(row)
+            print(
+                f"{row.k:1d} {row.T:3d}  {row.library_name:15s}"
+                f" {row.library_size:5d}"
+                f" {row.reference_library_name:15s}"
+                f" {row.reference_value:11.6f}"
+                f" {row.value:10.6f}"
+                f" {row.gap_to_reference:16.6f}"
+                f" {row.normalized_gap_to_reference:25.6f}"
+                f" {_format_optional_int(row.active_action_count):>14s}"
+                f" {_format_optional_int(row.active_edge_signature_count):>12s}",
+                flush=True,
+            )
+        print(f"# end case k={k} T={T} elapsed={time.perf_counter() - case_start:.3f}s", flush=True)
+    print()
+
+    if skipped:
+        print("Skipped libraries:")
+        for message in skipped:
+            print(f"  {message}")
+        print()
+
+    print("Top active edge signatures by case/library:")
+    grouped: dict[tuple[int, int], list[StrategyClassRelativeBenchmarkRow]] = defaultdict(list)
+    for row in rows:
+        grouped[(row.k, row.T)].append(row)
+    for case, case_rows in sorted(grouped.items()):
+        print(f"k={case[0]} T={case[1]}")
+        for row in sorted(case_rows, key=lambda item: (item.normalized_gap_to_reference, item.library_name))[:n]:
+            rendered = ", ".join(
+                f"{signature}:{count}"
+                for signature, count in row.top_active_edge_signatures[:5]
+            )
+            if not rendered:
+                rendered = "-"
+            print(
+                f"  {row.library_name:15s}"
+                f" gap_to_reference/sqrt(T)={row.normalized_gap_to_reference:.6f}"
+                f" active_edges=[{rendered}]"
+            )
+        print()
 
 
 def print_strategy_class_benchmark(
@@ -6466,6 +6745,33 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     strategy_class_benchmark_parser.add_argument("-n", type=int, default=20)
 
+    strategy_class_relative_benchmark_parser = subparsers.add_parser("strategy-class-relative-benchmark")
+    strategy_class_relative_benchmark_parser.add_argument(
+        "--cases",
+        default="5:30,5:40,5:50",
+        help="comma-separated k:T cases, e.g. 5:30,6:16",
+    )
+    strategy_class_relative_benchmark_parser.add_argument(
+        "--libraries",
+        default="top_prefix_all,one_run,two_run,local_edges",
+        help="comma-separated action-library names",
+    )
+    strategy_class_relative_benchmark_parser.add_argument("--reference-library", default="two_run")
+    strategy_class_relative_benchmark_parser.add_argument("--active-tolerance", type=float, default=1e-8)
+    strategy_class_relative_benchmark_parser.add_argument(
+        "--no-active-counts",
+        action="store_true",
+        default=True,
+        help="skip active action/signature counting for faster long-horizon value sweeps",
+    )
+    strategy_class_relative_benchmark_parser.add_argument(
+        "--active-counts",
+        dest="no_active_counts",
+        action="store_false",
+        help="collect active action/signature counts",
+    )
+    strategy_class_relative_benchmark_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -6770,6 +7076,16 @@ def main() -> None:
             include_probability_matching=args.include_probability_matching,
             probability_matching_max_k=args.probability_matching_max_k,
             probability_matching_max_T=args.probability_matching_max_T,
+            active_tolerance=args.active_tolerance,
+            collect_active_counts=not args.no_active_counts,
+            n=args.n,
+        )
+        return
+    if args.command == "strategy-class-relative-benchmark":
+        print_strategy_class_relative_benchmark(
+            _parse_cases(args.cases),
+            _parse_library_names(args.libraries),
+            reference_library_name=args.reference_library,
             active_tolerance=args.active_tolerance,
             collect_active_counts=not args.no_active_counts,
             n=args.n,

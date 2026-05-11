@@ -44,7 +44,9 @@ from expert_game_lab.experiments import (
     print_probability_matching_named_inspect,
     print_probability_matching_named_residuals,
     probability_matching_dual_face_repair_rows,
+    print_strategy_class_relative_benchmark,
     print_strategy_class_benchmark,
+    strategy_class_relative_benchmark_rows,
     strategy_class_benchmark_rows,
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
@@ -592,6 +594,42 @@ def test_strategy_class_benchmark_no_active_counts_preserves_values() -> None:
         assert cheap_row.active_edge_signature_count == -1
 
 
+def test_strategy_class_relative_benchmark_matches_exact_values() -> None:
+    exact_rows, exact_skipped = strategy_class_benchmark_rows(
+        ((3, 4),),
+        ("top_prefix_all", "one_run", "two_run"),
+        collect_active_counts=False,
+    )
+    relative_rows, relative_skipped = strategy_class_relative_benchmark_rows(
+        ((3, 4),),
+        ("top_prefix_all", "one_run", "two_run"),
+        reference_library_name="two_run",
+    )
+
+    assert not exact_skipped
+    assert not relative_skipped
+    exact_by_library = {row.library_name: row for row in exact_rows}
+    relative_by_library = {row.library_name: row for row in relative_rows}
+    reference_value = exact_by_library["two_run"].value
+    assert relative_by_library["two_run"].gap_to_reference == pytest.approx(0.0)
+    for library_name, row in relative_by_library.items():
+        assert row.value == pytest.approx(exact_by_library[library_name].value)
+        assert row.reference_value == pytest.approx(reference_value)
+        assert row.gap_to_reference == pytest.approx(reference_value - row.value)
+
+
+def test_strategy_class_relative_benchmark_reference_can_be_implicit() -> None:
+    rows, skipped = strategy_class_relative_benchmark_rows(
+        ((3, 4),),
+        ("top_prefix_all",),
+        reference_library_name="two_run",
+    )
+
+    assert not skipped
+    assert {row.library_name for row in rows} == {"top_prefix_all"}
+    assert rows[0].reference_library_name == "two_run"
+
+
 def test_strategy_class_benchmark_all_library_is_valid_beyond_k3() -> None:
     rows, skipped = strategy_class_benchmark_rows(((4, 3),), ("all", "all_three"))
 
@@ -613,6 +651,19 @@ def test_strategy_class_benchmark_printer_runs(capsys: pytest.CaptureFixture[str
     assert "Strategy class benchmark" in captured.out
     assert "gap/sqrt(T)" in captured.out
     assert "pm_avg_linf" in captured.out
+
+
+def test_strategy_class_relative_benchmark_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_strategy_class_relative_benchmark(
+        ((3, 4),),
+        ("top_prefix_all", "one_run", "two_run"),
+        reference_library_name="two_run",
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "Strategy class relative benchmark" in captured.out
+    assert "gap_to_reference/sqrt(T)" in captured.out
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:
