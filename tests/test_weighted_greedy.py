@@ -10,8 +10,11 @@ from expert_game_lab.experiments import (
     _edge_run_restricted_candidates,
     _one_run_edge_action_library,
     _one_run_restricted_candidates,
+    _lift_canonical_action_to_named_distribution,
+    _lift_canonical_vector_to_named,
     _prefix_one_run_action_library,
     _prefix_plus_tail_anchor_action_library,
+    _terminal_named_winner_probabilities,
     _local_edge_action_library,
     _top_prefix_length_from_policy,
     evaluate_top_prefix_oracle,
@@ -20,6 +23,7 @@ from expert_game_lab.experiments import (
     k9_motif_library_sweep,
     library_oracle,
     probability_matching_inspect_rows,
+    probability_matching_named_inspect_rows,
     library_lp_restricted_optimal,
     one_run_tie_analysis,
     one_run_restricted_optimal,
@@ -34,6 +38,7 @@ from expert_game_lab.experiments import (
     print_k3_motif_sweep,
     print_k9_motif_library_sweep,
     print_probability_matching_inspect,
+    print_probability_matching_named_inspect,
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
     print_top_prefix_length_regimes,
@@ -447,6 +452,53 @@ def test_probability_matching_inspect_printer_runs(capsys: pytest.CaptureFixture
 
     captured = capsys.readouterr()
     assert "Probability matching inspect" in captured.out
+    assert "weighted L1 error" in captured.out
+
+
+def test_lift_canonical_vector_to_named_averages_ties() -> None:
+    lifted = _lift_canonical_vector_to_named((5, 3, 3, 1), (0.6, 0.2, 0.1, 0.1))
+
+    assert lifted == pytest.approx((0.6, 0.15, 0.15, 0.1))
+
+
+def test_exchangeable_action_lift_preserves_mass_and_packet_counts() -> None:
+    lifted = _lift_canonical_action_to_named_distribution((5, 3, 3, 1), (1, 1, 0, 0))
+
+    assert sum(probability for probability, _ in lifted) == pytest.approx(1.0)
+    assert dict((action, probability) for probability, action in lifted) == {
+        (1, 0, 1, 0): pytest.approx(0.5),
+        (1, 1, 0, 0): pytest.approx(0.5),
+    }
+    for _, action in lifted:
+        assert (action[0], action[1] + action[2], action[3]) == (1, 1, 0)
+
+
+def test_terminal_named_winner_probabilities_sum_to_one() -> None:
+    winners = _terminal_named_winner_probabilities((2, 3, 3, 1))
+
+    assert winners == pytest.approx((0.0, 0.5, 0.5, 0.0))
+    assert sum(winners) == pytest.approx(1.0)
+
+
+def test_probability_matching_named_inspect_rows_run_and_keep_named_root() -> None:
+    _, rows = probability_matching_named_inspect_rows(3, 4, "all_three")
+
+    assert rows
+    for row in rows:
+        assert sum(row.winner_probabilities) == pytest.approx(1.0)
+        assert row.l1_error >= 0.0
+        assert row.linf_error >= 0.0
+
+    root_row = next(row for row in rows if row.time == 0 and row.named_state == (0, 0, 0))
+    assert root_row.winner_probabilities != pytest.approx((1.0, 0.0, 0.0))
+    assert root_row.winner_probabilities == pytest.approx((1.0 / 3.0,) * 3)
+
+
+def test_probability_matching_named_inspect_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_probability_matching_named_inspect(3, 4, "all_three", n=2)
+
+    captured = capsys.readouterr()
+    assert "Named probability matching inspect" in captured.out
     assert "weighted L1 error" in captured.out
 
 

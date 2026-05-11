@@ -4387,6 +4387,330 @@ def print_probability_matching_inspect(
         print(f"  winner probs={_format_float_tuple(row.winner_probabilities)}")
 
 
+def _named_score_groups(named_state: tuple[int, ...]) -> tuple[tuple[int, ...], ...]:
+    by_score: dict[int, list[int]] = defaultdict(list)
+    for index, score in enumerate(named_state):
+        by_score[score].append(index)
+    return tuple(
+        tuple(by_score[score])
+        for score in sorted(by_score, reverse=True)
+    )
+
+
+def _lift_canonical_vector_to_named(
+    named_state: tuple[int, ...],
+    canonical_vector: tuple[float, ...],
+) -> tuple[float, ...]:
+    named_vector = [0.0] * len(named_state)
+    offset = 0
+    for group in _named_score_groups(named_state):
+        group_mass = sum(canonical_vector[offset : offset + len(group)])
+        share = group_mass / len(group)
+        for named_index in group:
+            named_vector[named_index] = share
+        offset += len(group)
+    return tuple(named_vector)
+
+
+def _lift_canonical_action_to_named_distribution(
+    named_state: tuple[int, ...],
+    canonical_action: tuple[int, ...],
+) -> tuple[tuple[float, tuple[int, ...]], ...]:
+    partials: list[tuple[float, tuple[int, ...]]] = [(1.0, tuple(0 for _ in named_state))]
+    offset = 0
+    for group in _named_score_groups(named_state):
+        packet_action = canonical_action[offset : offset + len(group)]
+        ones_count = sum(packet_action)
+        choices = tuple(combinations(group, ones_count))
+        if not choices:
+            choices = ((),)
+        next_partials: list[tuple[float, tuple[int, ...]]] = []
+        choice_probability = 1.0 / len(choices)
+        for probability, bits in partials:
+            for choice in choices:
+                lifted = list(bits)
+                for named_index in choice:
+                    lifted[named_index] = 1
+                next_partials.append((probability * choice_probability, tuple(lifted)))
+        partials = next_partials
+        offset += len(group)
+
+    aggregated: dict[tuple[int, ...], float] = defaultdict(float)
+    for probability, action in partials:
+        aggregated[action] += probability
+    return tuple(
+        sorted(
+            ((probability, action) for action, probability in aggregated.items()),
+            key=lambda item: item[1],
+        )
+    )
+
+
+def _lift_dual_to_named_distribution(
+    named_state: tuple[int, ...],
+    dual_weights: tuple[tuple[tuple[int, ...], float], ...],
+    support_tolerance: float,
+) -> tuple[tuple[float, tuple[int, ...]], ...]:
+    aggregated: dict[tuple[int, ...], float] = defaultdict(float)
+    for canonical_action, dual_weight in dual_weights:
+        if dual_weight < support_tolerance:
+            continue
+        for lift_probability, named_action in _lift_canonical_action_to_named_distribution(
+            named_state,
+            canonical_action,
+        ):
+            aggregated[named_action] += dual_weight * lift_probability
+    total = sum(aggregated.values())
+    if total <= 0:
+        raise ValueError("lifted dual distribution has zero mass")
+    return tuple(
+        sorted(
+            ((probability / total, action) for action, probability in aggregated.items()),
+            key=lambda item: item[1],
+        )
+    )
+
+
+def _terminal_named_winner_probabilities(named_state: tuple[int, ...]) -> tuple[float, ...]:
+    maximum = max(named_state)
+    winners = tuple(index for index, value in enumerate(named_state) if value == maximum)
+    return tuple(
+        1.0 / len(winners) if index in winners else 0.0
+        for index in range(len(named_state))
+    )
+
+
+def _named_probability_matching_dual_policy(
+    named_state: tuple[int, ...],
+    remaining_horizon: int,
+    library_actions: tuple[tuple[int, ...], ...],
+    value_layers: list[dict[tuple[int, ...], float]],
+    support_tolerance: float,
+    canonical_policy_memo: dict[
+        tuple[tuple[int, ...], int],
+        tuple[tuple[tuple[int, ...], float], tuple[float, ...]],
+    ],
+    named_policy_memo: dict[
+        tuple[tuple[int, ...], int],
+        tuple[tuple[tuple[float, tuple[int, ...]], ...], tuple[float, ...]],
+    ],
+) -> tuple[tuple[tuple[float, tuple[int, ...]], ...], tuple[float, ...]]:
+    named_key = (named_state, remaining_horizon)
+    if named_key in named_policy_memo:
+        return named_policy_memo[named_key]
+
+    canonical_state = canon(named_state)
+    canonical_key = (canonical_state, remaining_horizon)
+    if canonical_key not in canonical_policy_memo:
+        continuation_values = value_layers[remaining_horizon - 1]
+        q_by_action = {
+            action: _next_state_value(canonical_state, action, continuation_values)
+            for action in library_actions
+        }
+        primal = solve_minimax_step(q_by_action, len(named_state))
+        if not primal.success:
+            raise RuntimeError(f"primal LP failed at named state {named_state}: {primal.message}")
+        dual = solve_adversary_dual(q_by_action, len(named_state))
+        if not dual.success:
+            raise RuntimeError(f"dual LP failed at named state {named_state}: {dual.message}")
+        canonical_policy_memo[canonical_key] = (dual.weights_by_action, primal.p)
+
+    dual_weights, canonical_p = canonical_policy_memo[canonical_key]
+    result = (
+        _lift_dual_to_named_distribution(named_state, dual_weights, support_tolerance),
+        canonical_p,
+    )
+    named_policy_memo[named_key] = result
+    return result
+
+
+def _named_winner_probabilities_from_state(
+    named_state: tuple[int, ...],
+    remaining_horizon: int,
+    library_actions: tuple[tuple[int, ...], ...],
+    value_layers: list[dict[tuple[int, ...], float]],
+    support_tolerance: float,
+    canonical_policy_memo: dict[
+        tuple[tuple[int, ...], int],
+        tuple[tuple[tuple[int, ...], float], tuple[float, ...]],
+    ],
+    named_policy_memo: dict[
+        tuple[tuple[int, ...], int],
+        tuple[tuple[tuple[float, tuple[int, ...]], ...], tuple[float, ...]],
+    ],
+    memo: dict[tuple[tuple[int, ...], int], tuple[float, ...]],
+) -> tuple[float, ...]:
+    key = (named_state, remaining_horizon)
+    if key in memo:
+        return memo[key]
+    if remaining_horizon == 0:
+        result = _terminal_named_winner_probabilities(named_state)
+        memo[key] = result
+        return result
+
+    lifted_dual, _ = _named_probability_matching_dual_policy(
+        named_state,
+        remaining_horizon,
+        library_actions,
+        value_layers,
+        support_tolerance,
+        canonical_policy_memo,
+        named_policy_memo,
+    )
+    probabilities = [0.0] * len(named_state)
+    for action_probability, named_action in lifted_dual:
+        next_state = tuple(named_state[index] + named_action[index] for index in range(len(named_state)))
+        next_probabilities = _named_winner_probabilities_from_state(
+            next_state,
+            remaining_horizon - 1,
+            library_actions,
+            value_layers,
+            support_tolerance,
+            canonical_policy_memo,
+            named_policy_memo,
+            memo,
+        )
+        for index, probability in enumerate(next_probabilities):
+            probabilities[index] += action_probability * probability
+    result = tuple(probabilities)
+    memo[key] = result
+    return result
+
+
+def probability_matching_named_inspect_rows(
+    k: int,
+    T: int,
+    library_name: str,
+    support_tolerance: float = 1e-8,
+) -> tuple[list[dict[tuple[int, ...], float]], list[NamedProbabilityMatchingInspectRow]]:
+    library_actions = _named_experiment_action_library(k, library_name, T)
+    value_layers = _library_lp_value_layers(k, T, library_actions)
+    canonical_policy_memo: dict[
+        tuple[tuple[int, ...], int],
+        tuple[tuple[tuple[int, ...], float], tuple[float, ...]],
+    ] = {}
+    named_policy_memo: dict[
+        tuple[tuple[int, ...], int],
+        tuple[tuple[tuple[float, tuple[int, ...]], ...], tuple[float, ...]],
+    ] = {}
+    memo: dict[tuple[tuple[int, ...], int], tuple[float, ...]] = {}
+    zero = tuple(0 for _ in range(k))
+    occupancy: list[defaultdict[tuple[int, ...], float]] = [defaultdict(float) for _ in range(T + 1)]
+    occupancy[0][zero] = 1.0
+    rows: list[NamedProbabilityMatchingInspectRow] = []
+
+    for time in range(T):
+        remaining_horizon = T - time
+        for named_state, probability in tuple(occupancy[time].items()):
+            lifted_dual, canonical_p = _named_probability_matching_dual_policy(
+                named_state,
+                remaining_horizon,
+                library_actions,
+                value_layers,
+                support_tolerance,
+                canonical_policy_memo,
+                named_policy_memo,
+            )
+            lifted_p = _lift_canonical_vector_to_named(named_state, canonical_p)
+            winner_probabilities = _named_winner_probabilities_from_state(
+                named_state,
+                remaining_horizon,
+                library_actions,
+                value_layers,
+                support_tolerance,
+                canonical_policy_memo,
+                named_policy_memo,
+                memo,
+            )
+            differences = tuple(
+                lifted_p[index] - winner_probabilities[index]
+                for index in range(k)
+            )
+            canonical_state = canon(named_state)
+            rows.append(
+                NamedProbabilityMatchingInspectRow(
+                    time=time,
+                    remaining_horizon=remaining_horizon,
+                    named_state=named_state,
+                    canonical_state=canonical_state,
+                    packet_type=packet_type(canonical_state),
+                    packet_gaps=_packet_gaps(canonical_state),
+                    occupancy_probability=probability,
+                    lifted_learner_distribution=lifted_p,
+                    winner_probabilities=winner_probabilities,
+                    l1_error=sum(abs(value) for value in differences),
+                    linf_error=max((abs(value) for value in differences), default=0.0),
+                )
+            )
+            for action_probability, named_action in lifted_dual:
+                next_state = tuple(named_state[index] + named_action[index] for index in range(k))
+                occupancy[time + 1][next_state] += probability * action_probability
+
+    return [dict(layer) for layer in occupancy], rows
+
+
+def print_probability_matching_named_inspect(
+    k: int,
+    T: int,
+    library_name: str,
+    packet_type_filter: tuple[int, ...] | None = None,
+    packet_gaps_filter: tuple[int, ...] | None = None,
+    support_tolerance: float = 1e-8,
+    n: int = 20,
+) -> None:
+    library_actions = _named_experiment_action_library(k, library_name, T)
+    occupancy, all_rows = probability_matching_named_inspect_rows(
+        k,
+        T,
+        library_name,
+        support_tolerance=support_tolerance,
+    )
+    rows = [
+        row
+        for row in all_rows
+        if (packet_type_filter is None or row.packet_type == packet_type_filter)
+        and (packet_gaps_filter is None or row.packet_gaps == packet_gaps_filter)
+    ]
+    value_layers = _library_lp_value_layers(k, T, library_actions)
+    zero = tuple(0 for _ in range(k))
+    optimal_value = optimal_values(k, T)[T][zero]
+    restricted_value = value_layers[T][zero]
+    total_occupancy = sum(row.occupancy_probability for row in rows)
+    total_weighted_l1 = sum(row.weighted_l1_error for row in rows)
+    total_weighted_linf = sum(row.weighted_linf_error for row in rows)
+
+    print(f"Named probability matching inspect, k={k}, T={T}")
+    print()
+    print(f"library: {library_name}")
+    print(f"library size: {len(library_actions)}")
+    print(f"support tolerance: {support_tolerance:.3g}")
+    print(f"packet type filter: {packet_type_filter}")
+    print(f"packet gaps filter: {packet_gaps_filter}")
+    print(f"V_star: {optimal_value:.6f}")
+    print(f"V_restricted: {restricted_value:.6f}")
+    print(f"gap: {optimal_value - restricted_value:.6f}")
+    print(f"total named occupancy mass: {sum(sum(layer.values()) for layer in occupancy[:-1]):.6f}")
+    print(f"matching rows: {len(rows)}")
+    print(f"weighted L1 error: {total_weighted_l1:.6f}")
+    print(f"weighted Linf error: {total_weighted_linf:.6f}")
+    print(f"avg L1 error: {total_weighted_l1 / total_occupancy if total_occupancy > 0 else 0.0:.6f}")
+    print(f"avg Linf error: {total_weighted_linf / total_occupancy if total_occupancy > 0 else 0.0:.6f}")
+    print()
+
+    print("Top rows by occupancy-weighted Linf error:")
+    for row in sorted(rows, key=lambda item: (-item.weighted_linf_error, item.time, item.named_state))[:n]:
+        print(
+            f"t={row.time:2d} rem={row.remaining_horizon:2d}"
+            f" named={row.named_state} canon={row.canonical_state}"
+            f" ptype={row.packet_type} gaps={row.packet_gaps}"
+            f" occ={row.occupancy_probability:.6f}"
+            f" l1={row.l1_error:.6f} linf={row.linf_error:.6f}"
+            f" weighted_linf={row.weighted_linf_error:.6f}"
+        )
+        print(f"  lifted learner p={_format_float_tuple(row.lifted_learner_distribution)}")
+        print(f"  named winner probs={_format_float_tuple(row.winner_probabilities)}")
+
+
 def _length_parity_category(lengths: tuple[int, ...]) -> str:
     has_odd = any(length % 2 == 1 for length in lengths)
     has_even = any(length % 2 == 0 for length in lengths)
@@ -5112,6 +5436,15 @@ def _build_parser() -> argparse.ArgumentParser:
     probability_matching_inspect_parser.add_argument("--support-tolerance", type=float, default=1e-8)
     probability_matching_inspect_parser.add_argument("-n", type=int, default=20)
 
+    probability_matching_named_inspect_parser = subparsers.add_parser("probability-matching-named-inspect")
+    probability_matching_named_inspect_parser.add_argument("--k", type=int, required=True)
+    probability_matching_named_inspect_parser.add_argument("--T", type=int, required=True)
+    probability_matching_named_inspect_parser.add_argument("--library", required=True)
+    probability_matching_named_inspect_parser.add_argument("--packet-type")
+    probability_matching_named_inspect_parser.add_argument("--packet-gaps")
+    probability_matching_named_inspect_parser.add_argument("--support-tolerance", type=float, default=1e-8)
+    probability_matching_named_inspect_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -5364,6 +5697,17 @@ def main() -> None:
         return
     if args.command == "probability-matching-inspect":
         print_probability_matching_inspect(
+            args.k,
+            args.T,
+            args.library,
+            packet_type_filter=_parse_int_tuple(args.packet_type) if args.packet_type else None,
+            packet_gaps_filter=_parse_int_tuple(args.packet_gaps) if args.packet_gaps else None,
+            support_tolerance=args.support_tolerance,
+            n=args.n,
+        )
+        return
+    if args.command == "probability-matching-named-inspect":
+        print_probability_matching_named_inspect(
             args.k,
             args.T,
             args.library,
