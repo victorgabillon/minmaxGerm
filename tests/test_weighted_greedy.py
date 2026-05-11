@@ -17,7 +17,9 @@ from expert_game_lab.experiments import (
     evaluate_top_prefix_oracle,
     filter_weighted_greedy_contributions,
     k3_motif_sweep,
+    k9_motif_library_sweep,
     library_oracle,
+    probability_matching_inspect_rows,
     library_lp_restricted_optimal,
     one_run_tie_analysis,
     one_run_restricted_optimal,
@@ -30,6 +32,8 @@ from expert_game_lab.experiments import (
     print_library_lp_dual_orbit_completion,
     print_library_lp_dual_orbits,
     print_k3_motif_sweep,
+    print_k9_motif_library_sweep,
+    print_probability_matching_inspect,
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
     print_top_prefix_length_regimes,
@@ -395,7 +399,13 @@ def test_k3_motif_sweep_runs() -> None:
     rows = k3_motif_sweep((4, 5))
 
     assert rows
-    assert {row.library_name for row in rows} >= {"comb", "twin_comb", "comb_twin", "all_three"}
+    assert {row.library_name for row in rows} >= {
+        "comb",
+        "twin_comb3",
+        "tail_singleton",
+        "comb_twin_comb3",
+        "all_three",
+    }
     assert all(row.lp_value <= row.optimal_value + 1e-9 for row in rows)
 
 
@@ -404,7 +414,40 @@ def test_k3_motif_sweep_printer_runs(capsys: pytest.CaptureFixture[str]) -> None
 
     captured = capsys.readouterr()
     assert "k=3 motif sweep" in captured.out
-    assert "comb_twin" in captured.out
+    assert "comb_twin_comb3" in captured.out
+
+
+def test_k9_motif_library_sweep_runs() -> None:
+    rows = k9_motif_library_sweep((1,))
+
+    assert rows
+    assert {row.family_name for row in rows} >= {"top_prefix_all", "one_run", "two_run"}
+
+
+def test_k9_motif_library_sweep_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k9_motif_library_sweep((1,), n=2)
+
+    captured = capsys.readouterr()
+    assert "k=9 motif-library sweep" in captured.out
+    assert "top_prefix_all" in captured.out
+
+
+def test_probability_matching_inspect_rows_have_winner_probabilities() -> None:
+    _, rows = probability_matching_inspect_rows(3, 4, "all_three")
+
+    assert rows
+    for row in rows:
+        assert sum(row.winner_probabilities) == pytest.approx(1.0)
+        assert row.l1_error >= 0.0
+        assert row.linf_error >= 0.0
+
+
+def test_probability_matching_inspect_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_probability_matching_inspect(3, 4, "all_three", n=2)
+
+    captured = capsys.readouterr()
+    assert "Probability matching inspect" in captured.out
+    assert "weighted L1 error" in captured.out
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:

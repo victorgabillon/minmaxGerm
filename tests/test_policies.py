@@ -20,6 +20,7 @@ from expert_game_lab.policies import (
     top_prefix_three_regime_v6_policy,
     top_prefix_three_regime_v7_policy,
     top_prefix_tie_mimic_policy,
+    twin_comb3_policy,
 )
 
 
@@ -135,6 +136,19 @@ def test_top_prefix_gap_sum_policies_differ_only_on_tie_breaks() -> None:
         (1, 0, 1, 0),
         (0, 1, 0, 1),
     }
+
+
+@pytest.mark.parametrize("state", [(0, 0, 0), (2, 1, 1)])
+def test_twin_comb3_policy_uses_leader_against_tail_support(state: tuple[int, ...]) -> None:
+    policy = twin_comb3_policy(state)
+
+    assert {action for _, action in policy} == {(1, 0, 0), (0, 1, 1)}
+    assert sum(probability for probability, _ in policy) == pytest.approx(1.0)
+    expected_bits = [0.0, 0.0, 0.0]
+    for probability, action in policy:
+        for index, bit in enumerate(action):
+            expected_bits[index] += probability * bit
+    assert expected_bits == pytest.approx([0.5, 0.5, 0.5])
 
 
 def test_top_prefix_three_regime_policy_probabilities_sum_to_one_and_is_balanced() -> None:

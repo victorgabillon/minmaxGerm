@@ -40,6 +40,13 @@ def fixed_rank_policy(ones: set[int]):
     return policy
 
 
+def twin_comb3_policy(x: tuple[int, ...]) -> Policy:
+    state = canon(x)
+    if len(state) != 3:
+        raise ValueError("twin_comb3_policy is only defined for k=3")
+    return _balanced_from_base([(1.0, (1, 0, 0))])
+
+
 def _top_prefix_action(k: int, length: int) -> tuple[int, ...]:
     if k == 0:
         return ()

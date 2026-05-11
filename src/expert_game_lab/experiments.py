@@ -33,6 +33,7 @@ from .policies import (
     top_prefix_three_regime_v6_policy,
     top_prefix_three_regime_v7_policy,
     top_prefix_tie_mimic_policy,
+    twin_comb3_policy,
 )
 from .state import all_states, canon, packet_type
 
@@ -360,6 +361,64 @@ class K3MotifSweepRow:
     @property
     def lp_gap(self) -> float:
         return self.optimal_value - self.lp_value
+
+
+@dataclass(frozen=True)
+class K9MotifLibrarySweepRow:
+    T: int
+    family_name: str
+    library_size: int
+    value: float
+    optimal_value: float
+    gap: float
+    normalized_gap: float
+    top_active_edge_signatures: tuple[tuple[str, int], ...]
+    top_active_orbit_keys: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True)
+class ProbabilityMatchingInspectRow:
+    time: int
+    remaining_horizon: int
+    state: tuple[int, ...]
+    packet_type: tuple[int, ...]
+    packet_gaps: tuple[int, ...]
+    occupancy_probability: float
+    learner_distribution: tuple[float, ...]
+    winner_probabilities: tuple[float, ...]
+    l1_error: float
+    linf_error: float
+
+    @property
+    def weighted_l1_error(self) -> float:
+        return self.occupancy_probability * self.l1_error
+
+    @property
+    def weighted_linf_error(self) -> float:
+        return self.occupancy_probability * self.linf_error
+
+
+@dataclass(frozen=True)
+class NamedProbabilityMatchingInspectRow:
+    time: int
+    remaining_horizon: int
+    named_state: tuple[int, ...]
+    canonical_state: tuple[int, ...]
+    packet_type: tuple[int, ...]
+    packet_gaps: tuple[int, ...]
+    occupancy_probability: float
+    lifted_learner_distribution: tuple[float, ...]
+    winner_probabilities: tuple[float, ...]
+    l1_error: float
+    linf_error: float
+
+    @property
+    def weighted_l1_error(self) -> float:
+        return self.occupancy_probability * self.l1_error
+
+    @property
+    def weighted_linf_error(self) -> float:
+        return self.occupancy_probability * self.linf_error
 
 
 @dataclass(frozen=True)
@@ -3766,10 +3825,75 @@ def _restricted_lp_value_for_actions(
     return values[T][tuple(0 for _ in range(k))]
 
 
+def _library_lp_restricted_result_for_actions(
+    k: int,
+    T: int,
+    family_name: str,
+    actions: tuple[tuple[int, ...], ...],
+    orbit_rows: tuple[LibraryLPDualInspectRow, ...] = (),
+    active_tolerance: float = 1e-8,
+) -> K9MotifLibrarySweepRow:
+    if not actions:
+        raise ValueError(f"{family_name} action library must be non-empty")
+
+    state_layers = [tuple(all_states(k, used)) for used in range(T + 1)]
+    values: list[dict[tuple[int, ...], float]] = [
+        {state: float(max(state, default=0)) for state in state_layers[T]}
+    ]
+    active_edge_signature_counts: dict[str, int] = defaultdict(int)
+    active_orbit_key_counts: dict[str, int] = defaultdict(int)
+    orbit_groups_by_state = {
+        row.state: _packet_index_groups(row.state)
+        for row in orbit_rows
+    }
+
+    for horizon in range(1, T + 1):
+        previous = values[horizon - 1]
+        current: dict[tuple[int, ...], float] = {}
+        for state in state_layers[T - horizon]:
+            q_by_action = {
+                action: _next_state_value(state, action, previous)
+                for action in actions
+            }
+            solution = solve_minimax_step(q_by_action, k)
+            if not solution.success:
+                raise RuntimeError(f"LP failed at state {state}: {solution.message}")
+            current[state] = solution.value
+            groups = orbit_groups_by_state.get(state)
+            for action, q_value in q_by_action.items():
+                score = q_value - sum(solution.p[index] * action[index] for index in range(k))
+                if score < solution.value - active_tolerance:
+                    continue
+                active_edge_signature_counts[_format_edge_signature(_edge_signature(action))] += 1
+                if groups is not None:
+                    active_orbit_key_counts[str(_orbit_key_for_action(action, groups))] += 1
+        values.append(current)
+
+    zero = tuple(0 for _ in range(k))
+    value = values[T][zero]
+    optimal_value = optimal_values(k, T)[T][zero]
+    gap = optimal_value - value
+    return K9MotifLibrarySweepRow(
+        T=T,
+        family_name=family_name,
+        library_size=len(actions),
+        value=value,
+        optimal_value=optimal_value,
+        gap=gap,
+        normalized_gap=gap / (T ** 0.5 if T > 0 else 1.0),
+        top_active_edge_signatures=tuple(
+            sorted(active_edge_signature_counts.items(), key=lambda pair: (-pair[1], pair[0]))[:10]
+        ),
+        top_active_orbit_keys=tuple(
+            sorted(active_orbit_key_counts.items(), key=lambda pair: (-pair[1], pair[0]))[:10]
+        ),
+    )
+
+
 def _k3_motif_libraries() -> dict[str, tuple[tuple[int, ...], ...]]:
     motifs = {
-        "singleton": fixed_rank_action(3, {1}),
-        "twin_comb": fixed_rank_action(3, {1, 2}),
+        "twin_comb3": fixed_rank_action(3, {1}),
+        "tail_singleton": fixed_rank_action(3, {1, 2}),
         "comb": fixed_rank_action(3, {1, 3}),
     }
 
@@ -3782,13 +3906,13 @@ def _k3_motif_libraries() -> dict[str, tuple[tuple[int, ...], ...]]:
         return tuple(sorted(actions, key=_format_action))
 
     return {
-        "singleton": actions_for(("singleton",)),
-        "twin_comb": actions_for(("twin_comb",)),
+        "twin_comb3": actions_for(("twin_comb3",)),
+        "tail_singleton": actions_for(("tail_singleton",)),
         "comb": actions_for(("comb",)),
-        "comb_twin": actions_for(("comb", "twin_comb")),
-        "singleton_comb": actions_for(("singleton", "comb")),
-        "singleton_twin": actions_for(("singleton", "twin_comb")),
-        "all_three": actions_for(("singleton", "comb", "twin_comb")),
+        "comb_twin_comb3": actions_for(("comb", "twin_comb3")),
+        "comb_tail_singleton": actions_for(("comb", "tail_singleton")),
+        "twin_comb3_tail_singleton": actions_for(("twin_comb3", "tail_singleton")),
+        "all_three": actions_for(("twin_comb3", "comb", "tail_singleton")),
         "all": tuple(all_actions(3)),
     }
 
@@ -3796,7 +3920,7 @@ def _k3_motif_libraries() -> dict[str, tuple[tuple[int, ...], ...]]:
 def k3_motif_sweep(T_values: tuple[int, ...]) -> tuple[K3MotifSweepRow, ...]:
     rows: list[K3MotifSweepRow] = []
     libraries = _k3_motif_libraries()
-    single_motif_actions = {"singleton", "twin_comb", "comb"}
+    single_motif_actions = {"twin_comb3", "tail_singleton", "comb"}
     for T in T_values:
         optimal_value = optimal_values(3, T)[T][(0, 0, 0)]
         for library_name, actions in libraries.items():
@@ -3866,6 +3990,401 @@ def print_k3_motif_sweep(T_values: tuple[int, ...]) -> None:
             f" lp_gap={best.lp_gap:.6f}"
             f" lp_gap/sqrt(T)={best.lp_gap / (T ** 0.5):.6f}"
         )
+
+
+def _actions_with_edge_signatures(
+    actions: tuple[tuple[int, ...], ...],
+    signatures: set[tuple[int, ...]],
+) -> tuple[tuple[int, ...], ...]:
+    selected: set[tuple[int, ...]] = set()
+    for action in actions:
+        if _edge_signature(action) not in signatures:
+            continue
+        selected.add(action)
+        selected.add(complement(action))
+    return tuple(sorted(selected, key=_format_action))
+
+
+def _k9_observed_two_run_data(
+    k: int,
+    T: int,
+    support_tolerance: float,
+) -> tuple[tuple[tuple[int, ...], ...], tuple[LibraryLPDualInspectRow, ...]]:
+    two_run_actions = _action_library(k, "two_run", T=T)
+    _, rows = library_lp_dual_inspect_rows(
+        k,
+        T,
+        "two_run",
+        support_tolerance=support_tolerance,
+    )
+    return two_run_actions, tuple(rows)
+
+
+def _k9_motif_libraries(
+    k: int,
+    T: int,
+    support_tolerance: float = 1e-8,
+) -> tuple[
+    dict[str, tuple[tuple[int, ...], ...]],
+    tuple[LibraryLPDualInspectRow, ...],
+]:
+    two_run_actions, observed_rows = _k9_observed_two_run_data(k, T, support_tolerance)
+    observed_used_actions: set[tuple[int, ...]] = set()
+    observed_orbit_pairs: set[tuple[tuple[int, ...], tuple[int, ...]]] = set()
+    observed_small_orbit_pairs: set[tuple[tuple[int, ...], tuple[int, ...]]] = set()
+    observed_balanced_orbit_pairs: set[tuple[tuple[int, ...], tuple[int, ...]]] = set()
+    for row in observed_rows:
+        groups = _packet_index_groups(row.state)
+        packet_sizes = tuple(len(group) for group in groups)
+        for _, action, _ in row.support:
+            observed_used_actions.add(action)
+            key = _orbit_key_for_action(action, groups)
+            pair = (packet_sizes, key)
+            observed_orbit_pairs.add(pair)
+            if sum(1 for count in key if count > 0) <= 2:
+                observed_small_orbit_pairs.add(pair)
+            active_exposures = [
+                count / packet_size
+                for packet_size, count in zip(packet_sizes, key, strict=True)
+                if count > 0
+            ]
+            if active_exposures and all(abs(exposure - 0.5) <= 0.3 for exposure in active_exposures):
+                observed_balanced_orbit_pairs.add(pair)
+
+    def actions_realizing_observed_pairs(
+        observed_pairs: set[tuple[tuple[int, ...], tuple[int, ...]]],
+    ) -> tuple[tuple[int, ...], ...]:
+        selected: set[tuple[int, ...]] = set()
+        by_packet_sizes = {
+            tuple(len(group) for group in _packet_index_groups(row.state)): _packet_index_groups(row.state)
+            for row in observed_rows
+        }
+        for action in two_run_actions:
+            for packet_sizes, groups in by_packet_sizes.items():
+                if (packet_sizes, _orbit_key_for_action(action, groups)) in observed_pairs:
+                    selected.add(action)
+                    selected.add(complement(action))
+                    break
+        return tuple(sorted(selected, key=_format_action))
+
+    active_counts = library_lp_restricted_optimal(k, T, "two_run").active_edge_signature_counts
+    libraries: dict[str, tuple[tuple[int, ...], ...]] = {
+        "top_prefix_all": _action_library(k, "top_prefix_all", T=T),
+        "one_run": _action_library(k, "one_run", T=T),
+        "two_run": two_run_actions,
+        "origin_orbit_only": tuple(
+            sorted(
+                {
+                    candidate
+                    for action in two_run_actions
+                    if sum(action) == 4
+                    for candidate in (action, complement(action))
+                },
+                key=_format_action,
+            )
+        ),
+        "packet_count_small": actions_realizing_observed_pairs(observed_small_orbit_pairs),
+        "packet_count_balanced": actions_realizing_observed_pairs(observed_balanced_orbit_pairs),
+        "observed_orbit_keys": actions_realizing_observed_pairs(observed_orbit_pairs),
+        "observed_used_actions": tuple(sorted(observed_used_actions, key=_format_action)),
+        "observed_used_actions_plus_complements": tuple(
+            sorted(
+                {
+                    candidate
+                    for action in observed_used_actions
+                    for candidate in (action, complement(action))
+                },
+                key=_format_action,
+            )
+        ),
+        "all": tuple(all_actions(k)),
+    }
+    for top_n in (5, 10, 20, 40):
+        signatures = {
+            tuple(int(bit) for bit in signature)
+            for signature, _ in active_counts[:top_n]
+        }
+        libraries[f"top_{top_n}_active_edge_signatures"] = _actions_with_edge_signatures(two_run_actions, signatures)
+    return libraries, observed_rows
+
+
+def k9_motif_library_sweep(
+    T_values: tuple[int, ...],
+    support_tolerance: float = 1e-8,
+) -> tuple[K9MotifLibrarySweepRow, ...]:
+    rows: list[K9MotifLibrarySweepRow] = []
+    for T in T_values:
+        libraries, observed_rows = _k9_motif_libraries(9, T, support_tolerance=support_tolerance)
+        for family_name, actions in libraries.items():
+            if not actions:
+                continue
+            rows.append(
+                _library_lp_restricted_result_for_actions(
+                    9,
+                    T,
+                    family_name,
+                    actions,
+                    orbit_rows=observed_rows,
+                )
+            )
+    return tuple(rows)
+
+
+def print_k9_motif_library_sweep(
+    T_values: tuple[int, ...],
+    support_tolerance: float = 1e-8,
+    n: int = 10,
+) -> None:
+    print("k=9 motif-library sweep")
+    print()
+    print(f"T values: {T_values}")
+    print(f"support tolerance: {support_tolerance:.3g}")
+    print(
+        "family definitions: observed_* families are static libraries derived from"
+        " the two_run dual occupancy at the same T; packet_count_* are observed"
+        " packet-size/orbit-key pairs realized by two_run actions."
+    )
+    print()
+    print("T  family                            size  V_star      V_restricted      gap   gap/sqrt(T)  exact")
+    rows = k9_motif_library_sweep(T_values, support_tolerance=support_tolerance)
+    for T in T_values:
+        print(f"T={T}")
+        for row in sorted(
+            (row for row in rows if row.T == T),
+            key=lambda item: (item.normalized_gap, item.library_size, item.family_name),
+        ):
+            print(
+                f"{T:1d}  {row.family_name:32s} {row.library_size:5d}"
+                f"  {row.optimal_value:10.6f} {row.value:13.6f}"
+                f" {row.gap:8.6f} {row.normalized_gap:13.6f}"
+                f"  {row.gap <= 1e-8}"
+            )
+            if row.top_active_edge_signatures:
+                rendered_edges = ", ".join(
+                    f"{signature}:{count}"
+                    for signature, count in row.top_active_edge_signatures[:n]
+                )
+                print(f"    active edge signatures: {rendered_edges}")
+            if row.top_active_orbit_keys:
+                rendered_orbits = ", ".join(
+                    f"{key}:{count}"
+                    for key, count in row.top_active_orbit_keys[:n]
+                )
+                print(f"    active orbit keys: {rendered_orbits}")
+        print()
+
+
+def _named_experiment_action_library(
+    k: int,
+    library_name: str,
+    T: int,
+) -> tuple[tuple[int, ...], ...]:
+    if k == 3 and library_name in _k3_motif_libraries():
+        return _k3_motif_libraries()[library_name]
+    return _action_library(k, library_name, T=T)
+
+
+def _terminal_winner_probabilities(state: tuple[int, ...]) -> tuple[float, ...]:
+    if not state:
+        return ()
+    maximum = max(state)
+    winner_count = sum(1 for value in state if value == maximum)
+    return tuple(
+        1.0 / winner_count if value == maximum else 0.0
+        for value in state
+    )
+
+
+def _winner_probability_layers_for_dual_policy(
+    k: int,
+    T: int,
+    library_actions: tuple[tuple[int, ...], ...],
+    value_layers: list[dict[tuple[int, ...], float]],
+    support_tolerance: float,
+) -> list[dict[tuple[int, ...], tuple[float, ...]]]:
+    state_layers = [tuple(all_states(k, used)) for used in range(T + 1)]
+    winner_layers: list[dict[tuple[int, ...], tuple[float, ...]]] = [
+        {state: _terminal_winner_probabilities(state) for state in state_layers[T]}
+    ]
+
+    for horizon in range(1, T + 1):
+        continuation_values = value_layers[horizon - 1]
+        continuation_winners = winner_layers[horizon - 1]
+        current: dict[tuple[int, ...], tuple[float, ...]] = {}
+        for state in state_layers[T - horizon]:
+            q_by_action = {
+                action: _next_state_value(state, action, continuation_values)
+                for action in library_actions
+            }
+            dual = solve_adversary_dual(q_by_action, k)
+            if not dual.success:
+                raise RuntimeError(f"dual LP failed at state {state}: {dual.message}")
+            probabilities = [0.0] * k
+            retained_mass = 0.0
+            for action, weight in dual.weights_by_action:
+                if weight < support_tolerance:
+                    continue
+                retained_mass += weight
+                next_state = canon(tuple(state[index] + action[index] for index in range(k)))
+                next_probabilities = continuation_winners[next_state]
+                for index, probability in enumerate(next_probabilities):
+                    probabilities[index] += weight * probability
+            if retained_mass > 0 and retained_mass < 1.0:
+                probabilities = [probability / retained_mass for probability in probabilities]
+            current[state] = tuple(probabilities)
+        winner_layers.append(current)
+    return winner_layers
+
+
+def probability_matching_inspect_rows(
+    k: int,
+    T: int,
+    library_name: str,
+    packet_type_filter: tuple[int, ...] | None = None,
+    packet_gaps_filter: tuple[int, ...] | None = None,
+    support_tolerance: float = 1e-8,
+) -> tuple[list[dict[tuple[int, ...], float]], list[ProbabilityMatchingInspectRow]]:
+    library_actions = _named_experiment_action_library(k, library_name, T)
+    value_layers = _library_lp_value_layers(k, T, library_actions)
+    winner_layers = _winner_probability_layers_for_dual_policy(
+        k,
+        T,
+        library_actions,
+        value_layers,
+        support_tolerance,
+    )
+    zero = tuple(0 for _ in range(k))
+    occupancy: list[defaultdict[tuple[int, ...], float]] = [defaultdict(float) for _ in range(T + 1)]
+    occupancy[0][zero] = 1.0
+    rows: list[ProbabilityMatchingInspectRow] = []
+
+    for time in range(T):
+        remaining_horizon = T - time
+        continuation_values = value_layers[remaining_horizon - 1]
+        for state, probability in tuple(occupancy[time].items()):
+            q_by_action = {
+                action: _next_state_value(state, action, continuation_values)
+                for action in library_actions
+            }
+            primal = solve_minimax_step(q_by_action, k)
+            if not primal.success:
+                raise RuntimeError(f"primal LP failed at state {state}: {primal.message}")
+            dual = solve_adversary_dual(q_by_action, k)
+            if not dual.success:
+                raise RuntimeError(f"dual LP failed at state {state}: {dual.message}")
+
+            ptype = packet_type(state)
+            gaps = _packet_gaps(state)
+            winner_probabilities = winner_layers[remaining_horizon][state]
+            differences = tuple(
+                primal.p[index] - winner_probabilities[index]
+                for index in range(k)
+            )
+            if (
+                (packet_type_filter is None or ptype == packet_type_filter)
+                and (packet_gaps_filter is None or gaps == packet_gaps_filter)
+            ):
+                rows.append(
+                    ProbabilityMatchingInspectRow(
+                        time=time,
+                        remaining_horizon=remaining_horizon,
+                        state=state,
+                        packet_type=ptype,
+                        packet_gaps=gaps,
+                        occupancy_probability=probability,
+                        learner_distribution=primal.p,
+                        winner_probabilities=winner_probabilities,
+                        l1_error=sum(abs(value) for value in differences),
+                        linf_error=max((abs(value) for value in differences), default=0.0),
+                    )
+                )
+
+            for action, weight in dual.weights_by_action:
+                if weight < support_tolerance:
+                    continue
+                next_state = canon(tuple(state[index] + action[index] for index in range(k)))
+                occupancy[time + 1][next_state] += probability * weight
+
+    return [dict(layer) for layer in occupancy], rows
+
+
+def print_probability_matching_inspect(
+    k: int,
+    T: int,
+    library_name: str,
+    packet_type_filter: tuple[int, ...] | None = None,
+    packet_gaps_filter: tuple[int, ...] | None = None,
+    support_tolerance: float = 1e-8,
+    n: int = 20,
+) -> None:
+    library_actions = _named_experiment_action_library(k, library_name, T)
+    occupancy, rows = probability_matching_inspect_rows(
+        k,
+        T,
+        library_name,
+        packet_type_filter=packet_type_filter,
+        packet_gaps_filter=packet_gaps_filter,
+        support_tolerance=support_tolerance,
+    )
+    values = _library_lp_value_layers(k, T, library_actions)
+    zero = tuple(0 for _ in range(k))
+    optimal_value = optimal_values(k, T)[T][zero]
+    restricted_value = values[T][zero]
+    total_occupancy = sum(row.occupancy_probability for row in rows)
+    total_weighted_l1 = sum(row.weighted_l1_error for row in rows)
+    total_weighted_linf = sum(row.weighted_linf_error for row in rows)
+
+    print(f"Probability matching inspect, k={k}, T={T}")
+    print()
+    print(f"library: {library_name}")
+    print(f"library size: {len(library_actions)}")
+    print(f"support tolerance: {support_tolerance:.3g}")
+    print(f"packet type filter: {packet_type_filter}")
+    print(f"packet gaps filter: {packet_gaps_filter}")
+    print(f"V_star: {optimal_value:.6f}")
+    print(f"V_restricted: {restricted_value:.6f}")
+    print(f"gap: {optimal_value - restricted_value:.6f}")
+    print(f"total occupancy mass: {sum(sum(layer.values()) for layer in occupancy[:-1]):.6f}")
+    print(f"matching rows: {len(rows)}")
+    print(f"weighted L1 error: {total_weighted_l1:.6f}")
+    print(f"weighted Linf error: {total_weighted_linf:.6f}")
+    print(f"avg L1 error: {total_weighted_l1 / total_occupancy if total_occupancy > 0 else 0.0:.6f}")
+    print(f"avg Linf error: {total_weighted_linf / total_occupancy if total_occupancy > 0 else 0.0:.6f}")
+    print()
+
+    regime_weights: dict[tuple[tuple[int, ...], tuple[int, ...]], float] = defaultdict(float)
+    regime_l1: dict[tuple[tuple[int, ...], tuple[int, ...]], float] = defaultdict(float)
+    regime_linf: dict[tuple[tuple[int, ...], tuple[int, ...]], float] = defaultdict(float)
+    for row in rows:
+        key = (row.packet_type, row.packet_gaps)
+        regime_weights[key] += row.occupancy_probability
+        regime_l1[key] += row.weighted_l1_error
+        regime_linf[key] += row.weighted_linf_error
+
+    print("Top regimes by weighted Linf error:")
+    for key, weight in sorted(regime_linf.items(), key=lambda pair: (-pair[1], pair[0]))[:n]:
+        ptype, gaps = key
+        occupancy_mass = regime_weights[key]
+        print(
+            f"  packet type={ptype} gaps={gaps}"
+            f" occupancy={occupancy_mass:.6f}"
+            f" weighted_l1={regime_l1[key]:.6f}"
+            f" weighted_linf={weight:.6f}"
+            f" avg_linf={weight / occupancy_mass if occupancy_mass > 0 else 0.0:.6f}"
+        )
+    print()
+
+    print("Top rows by occupancy-weighted Linf error:")
+    for row in sorted(rows, key=lambda item: (-item.weighted_linf_error, item.time, item.state))[:n]:
+        print(
+            f"t={row.time:2d} rem={row.remaining_horizon:2d}"
+            f" state={row.state} ptype={row.packet_type} gaps={row.packet_gaps}"
+            f" occ={row.occupancy_probability:.6f}"
+            f" l1={row.l1_error:.6f} linf={row.linf_error:.6f}"
+            f" weighted_linf={row.weighted_linf_error:.6f}"
+        )
+        print(f"  learner p={_format_float_tuple(row.learner_distribution)}")
+        print(f"  winner probs={_format_float_tuple(row.winner_probabilities)}")
 
 
 def _length_parity_category(lengths: tuple[int, ...]) -> str:
@@ -4575,6 +5094,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="comma-separated horizons, e.g. 10,20,50,100",
     )
 
+    k9_motif_library_sweep_parser = subparsers.add_parser("k9-motif-library-sweep")
+    k9_motif_library_sweep_parser.add_argument(
+        "--T-values",
+        default="7",
+        help="comma-separated horizons, e.g. 7",
+    )
+    k9_motif_library_sweep_parser.add_argument("--support-tolerance", type=float, default=1e-8)
+    k9_motif_library_sweep_parser.add_argument("-n", type=int, default=10)
+
+    probability_matching_inspect_parser = subparsers.add_parser("probability-matching-inspect")
+    probability_matching_inspect_parser.add_argument("--k", type=int, required=True)
+    probability_matching_inspect_parser.add_argument("--T", type=int, required=True)
+    probability_matching_inspect_parser.add_argument("--library", required=True)
+    probability_matching_inspect_parser.add_argument("--packet-type")
+    probability_matching_inspect_parser.add_argument("--packet-gaps")
+    probability_matching_inspect_parser.add_argument("--support-tolerance", type=float, default=1e-8)
+    probability_matching_inspect_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -4817,6 +5354,24 @@ def main() -> None:
         return
     if args.command == "k3-motif-sweep":
         print_k3_motif_sweep(_parse_T_values(args.T_values))
+        return
+    if args.command == "k9-motif-library-sweep":
+        print_k9_motif_library_sweep(
+            _parse_T_values(args.T_values),
+            support_tolerance=args.support_tolerance,
+            n=args.n,
+        )
+        return
+    if args.command == "probability-matching-inspect":
+        print_probability_matching_inspect(
+            args.k,
+            args.T,
+            args.library,
+            packet_type_filter=_parse_int_tuple(args.packet_type) if args.packet_type else None,
+            packet_gaps_filter=_parse_int_tuple(args.packet_gaps) if args.packet_gaps else None,
+            support_tolerance=args.support_tolerance,
+            n=args.n,
+        )
         return
     raise ValueError(f"unknown command: {args.command}")
 
