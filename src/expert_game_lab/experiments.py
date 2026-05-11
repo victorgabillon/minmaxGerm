@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from itertools import combinations
 from math import comb
 
+import numpy as np
+from scipy.optimize import linprog
+
 from .actions import all_actions, comb_action, complement, fixed_rank_action
 from .defects import commutation_defect, commutation_defect_mixed, greedy_defect
 from .dp_optimal import optimal_values
@@ -432,6 +435,34 @@ class NamedProbabilityMatchingResidualAggregate:
     avg_linf_error: float
     max_linf_error: float
     representative_row: NamedProbabilityMatchingInspectRow
+
+
+@dataclass(frozen=True)
+class DualFaceRepairRow:
+    original_row: NamedProbabilityMatchingInspectRow
+    repaired_winner_probabilities: tuple[float, ...]
+    repaired_l1_error: float
+    repaired_linf_error: float
+    active_candidate_count: int
+    support: tuple[tuple[float, tuple[int, ...], tuple[int, ...], tuple[int, ...]], ...]
+    success: bool
+    message: str
+
+    @property
+    def original_weighted_l1_error(self) -> float:
+        return self.original_row.weighted_l1_error
+
+    @property
+    def original_weighted_linf_error(self) -> float:
+        return self.original_row.weighted_linf_error
+
+    @property
+    def repaired_weighted_l1_error(self) -> float:
+        return self.original_row.occupancy_probability * self.repaired_l1_error
+
+    @property
+    def repaired_weighted_linf_error(self) -> float:
+        return self.original_row.occupancy_probability * self.repaired_linf_error
 
 
 @dataclass(frozen=True)
@@ -4942,6 +4973,341 @@ def print_probability_matching_named_residuals(
         )
 
 
+def _canonical_action_named_successor_winner_probabilities(
+    named_state: tuple[int, ...],
+    remaining_horizon: int,
+    canonical_action: tuple[int, ...],
+    library_actions: tuple[tuple[int, ...], ...],
+    value_layers: list[dict[tuple[int, ...], float]],
+    support_tolerance: float,
+    canonical_policy_memo: dict[
+        tuple[tuple[int, ...], int],
+        tuple[tuple[tuple[int, ...], float], tuple[float, ...]],
+    ],
+    named_policy_memo: dict[
+        tuple[tuple[int, ...], int],
+        tuple[tuple[tuple[float, tuple[int, ...]], ...], tuple[float, ...]],
+    ],
+    winner_memo: dict[tuple[tuple[int, ...], int], tuple[float, ...]],
+) -> tuple[float, ...]:
+    probabilities = [0.0] * len(named_state)
+    for lift_probability, named_action in _lift_canonical_action_to_named_distribution(
+        named_state,
+        canonical_action,
+    ):
+        next_state = tuple(named_state[index] + named_action[index] for index in range(len(named_state)))
+        next_probabilities = _named_winner_probabilities_from_state(
+            next_state,
+            remaining_horizon - 1,
+            library_actions,
+            value_layers,
+            support_tolerance,
+            canonical_policy_memo,
+            named_policy_memo,
+            winner_memo,
+        )
+        for index, probability in enumerate(next_probabilities):
+            probabilities[index] += lift_probability * probability
+    return tuple(probabilities)
+
+
+def _repair_named_probability_matching_row(
+    row: NamedProbabilityMatchingInspectRow,
+    library_actions: tuple[tuple[int, ...], ...],
+    value_layers: list[dict[tuple[int, ...], float]],
+    support_tolerance: float,
+    active_tolerance: float,
+    canonical_policy_memo: dict[
+        tuple[tuple[int, ...], int],
+        tuple[tuple[tuple[int, ...], float], tuple[float, ...]],
+    ],
+    named_policy_memo: dict[
+        tuple[tuple[int, ...], int],
+        tuple[tuple[tuple[float, tuple[int, ...]], ...], tuple[float, ...]],
+    ],
+    winner_memo: dict[tuple[tuple[int, ...], int], tuple[float, ...]],
+) -> DualFaceRepairRow:
+    k = len(row.named_state)
+    continuation_values = value_layers[row.remaining_horizon - 1]
+    q_by_action = {
+        action: _next_state_value(row.canonical_state, action, continuation_values)
+        for action in library_actions
+    }
+    primal = solve_minimax_step(q_by_action, k)
+    if not primal.success:
+        raise RuntimeError(f"primal LP failed at state {row.canonical_state}: {primal.message}")
+
+    scores = {
+        action: q_value - sum(primal.p[index] * action[index] for index in range(k))
+        for action, q_value in q_by_action.items()
+    }
+    active_actions = tuple(
+        action
+        for action, score in scores.items()
+        if score >= primal.value - active_tolerance
+    )
+    if not active_actions:
+        return DualFaceRepairRow(
+            original_row=row,
+            repaired_winner_probabilities=row.winner_probabilities,
+            repaired_l1_error=row.l1_error,
+            repaired_linf_error=row.linf_error,
+            active_candidate_count=0,
+            support=(),
+            success=False,
+            message="no active actions",
+        )
+
+    successor_winners = tuple(
+        _canonical_action_named_successor_winner_probabilities(
+            row.named_state,
+            row.remaining_horizon,
+            action,
+            library_actions,
+            value_layers,
+            support_tolerance,
+            canonical_policy_memo,
+            named_policy_memo,
+            winner_memo,
+        )
+        for action in active_actions
+    )
+
+    action_count = len(active_actions)
+    variable_count = action_count + 2 * k
+    c = np.zeros(variable_count)
+    c[action_count:] = 1.0
+
+    a_eq = np.zeros((1 + k, variable_count))
+    b_eq = np.zeros(1 + k)
+    a_eq[0, :action_count] = 1.0
+    b_eq[0] = 1.0
+    for expert in range(k):
+        row_index = 1 + expert
+        for action_index, winner_probabilities in enumerate(successor_winners):
+            a_eq[row_index, action_index] = winner_probabilities[expert]
+        a_eq[row_index, action_count + expert] = 1.0
+        a_eq[row_index, action_count + k + expert] = -1.0
+        b_eq[row_index] = row.lifted_learner_distribution[expert]
+
+    a_ub = np.zeros((k, variable_count))
+    b_ub = np.full(k, -primal.value + active_tolerance)
+    for expert in range(k):
+        for action_index, action in enumerate(active_actions):
+            a_ub[expert, action_index] = float(action[expert]) - float(q_by_action[action])
+
+    bounds = [(0.0, None)] * variable_count
+    result = linprog(
+        c=c,
+        A_ub=a_ub,
+        b_ub=b_ub,
+        A_eq=a_eq,
+        b_eq=b_eq,
+        bounds=bounds,
+        method="highs",
+    )
+    if not result.success:
+        return DualFaceRepairRow(
+            original_row=row,
+            repaired_winner_probabilities=row.winner_probabilities,
+            repaired_l1_error=row.l1_error,
+            repaired_linf_error=row.linf_error,
+            active_candidate_count=action_count,
+            support=(),
+            success=False,
+            message=result.message,
+        )
+
+    weights = tuple(float(value) for value in result.x[:action_count])
+    repaired = tuple(
+        float(
+            sum(
+                weights[action_index] * successor_winners[action_index][expert]
+                for action_index in range(action_count)
+            )
+        )
+        for expert in range(k)
+    )
+    differences = tuple(
+        row.lifted_learner_distribution[index] - repaired[index]
+        for index in range(k)
+    )
+    groups = _packet_index_groups(row.canonical_state)
+    support = tuple(
+        sorted(
+            (
+                (weight, action, _edge_signature(action), _orbit_key_for_action(action, groups))
+                for action, weight in zip(active_actions, weights, strict=True)
+                if weight >= support_tolerance
+            ),
+            key=lambda item: (-item[0], _format_action(item[1])),
+        )
+    )
+    return DualFaceRepairRow(
+        original_row=row,
+        repaired_winner_probabilities=repaired,
+        repaired_l1_error=sum(abs(value) for value in differences),
+        repaired_linf_error=max((abs(value) for value in differences), default=0.0),
+        active_candidate_count=action_count,
+        support=support,
+        success=True,
+        message=result.message,
+    )
+
+
+def probability_matching_dual_face_repair_rows(
+    k: int,
+    T: int,
+    library_name: str,
+    packet_type_filter: tuple[int, ...] | None = None,
+    packet_gaps_filter: tuple[int, ...] | None = None,
+    support_tolerance: float = 1e-8,
+    active_tolerance: float = 1e-8,
+    n: int = 20,
+) -> tuple[list[NamedProbabilityMatchingInspectRow], list[DualFaceRepairRow]]:
+    library_actions = _named_experiment_action_library(k, library_name, T)
+    value_layers = _library_lp_value_layers(k, T, library_actions)
+    all_rows, canonical_aggregates, _ = probability_matching_named_residual_aggregates(
+        k,
+        T,
+        library_name,
+        packet_type_filter=packet_type_filter,
+        packet_gaps_filter=packet_gaps_filter,
+        support_tolerance=support_tolerance,
+    )
+    selected_rows: list[NamedProbabilityMatchingInspectRow] = []
+    seen: set[tuple[int, tuple[int, ...], tuple[int, ...]]] = set()
+    for aggregate in canonical_aggregates:
+        row = aggregate.representative_row
+        key = (row.remaining_horizon, row.canonical_state, row.named_state)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected_rows.append(row)
+        if len(selected_rows) >= n:
+            break
+
+    canonical_policy_memo: dict[
+        tuple[tuple[int, ...], int],
+        tuple[tuple[tuple[int, ...], float], tuple[float, ...]],
+    ] = {}
+    named_policy_memo: dict[
+        tuple[tuple[int, ...], int],
+        tuple[tuple[tuple[float, tuple[int, ...]], ...], tuple[float, ...]],
+    ] = {}
+    winner_memo: dict[tuple[tuple[int, ...], int], tuple[float, ...]] = {}
+    repair_rows = [
+        _repair_named_probability_matching_row(
+            row,
+            library_actions,
+            value_layers,
+            support_tolerance,
+            active_tolerance,
+            canonical_policy_memo,
+            named_policy_memo,
+            winner_memo,
+        )
+        for row in selected_rows
+    ]
+    return all_rows, repair_rows
+
+
+def print_probability_matching_dual_face_repair(
+    k: int,
+    T: int,
+    library_name: str,
+    packet_type_filter: tuple[int, ...] | None = None,
+    packet_gaps_filter: tuple[int, ...] | None = None,
+    support_tolerance: float = 1e-8,
+    active_tolerance: float = 1e-8,
+    n: int = 20,
+    support_n: int = 12,
+) -> None:
+    library_actions = _named_experiment_action_library(k, library_name, T)
+    value_layers = _library_lp_value_layers(k, T, library_actions)
+    all_rows, repair_rows = probability_matching_dual_face_repair_rows(
+        k,
+        T,
+        library_name,
+        packet_type_filter=packet_type_filter,
+        packet_gaps_filter=packet_gaps_filter,
+        support_tolerance=support_tolerance,
+        active_tolerance=active_tolerance,
+        n=n,
+    )
+    zero = tuple(0 for _ in range(k))
+    optimal_value = optimal_values(k, T)[T][zero]
+    restricted_value = value_layers[T][zero]
+    total_original_l1 = sum(row.weighted_l1_error for row in all_rows)
+    total_original_linf = sum(row.weighted_linf_error for row in all_rows)
+    selected_original_l1 = sum(row.original_weighted_l1_error for row in repair_rows)
+    selected_original_linf = sum(row.original_weighted_linf_error for row in repair_rows)
+    selected_repaired_l1 = sum(row.repaired_weighted_l1_error for row in repair_rows)
+    selected_repaired_linf = sum(row.repaired_weighted_linf_error for row in repair_rows)
+
+    print(f"Probability matching dual-face repair, k={k}, T={T}")
+    print()
+    print(f"library: {library_name}")
+    print(f"library size: {len(library_actions)}")
+    print(f"support tolerance: {support_tolerance:.3g}")
+    print(f"active tolerance: {active_tolerance:.3g}")
+    print(f"packet type filter: {packet_type_filter}")
+    print(f"packet gaps filter: {packet_gaps_filter}")
+    print(f"V_star: {optimal_value:.6f}")
+    print(f"V_restricted: {restricted_value:.6f}")
+    print(f"gap: {optimal_value - restricted_value:.6f}")
+    print(f"total rows inspected: {len(repair_rows)}")
+    print(f"full original weighted L1 error: {total_original_l1:.6f}")
+    print(f"full original weighted Linf error: {total_original_linf:.6f}")
+    print(f"selected original weighted L1 error: {selected_original_l1:.6f}")
+    print(f"selected original weighted Linf error: {selected_original_linf:.6f}")
+    print(f"selected repaired weighted L1 error: {selected_repaired_l1:.6f}")
+    print(f"selected repaired weighted Linf error: {selected_repaired_linf:.6f}")
+    print()
+
+    print("Top repaired rows:")
+    for repair in sorted(
+        repair_rows,
+        key=lambda item: (-item.original_weighted_linf_error, item.original_row.time, item.original_row.named_state),
+    ):
+        row = repair.original_row
+        original_diff = _format_named_residual_difference(row)
+        repaired_diff = _format_float_tuple(
+            tuple(
+                row.lifted_learner_distribution[index] - repair.repaired_winner_probabilities[index]
+                for index in range(k)
+            )
+        )
+        print(
+            f"t={row.time:2d} rem={row.remaining_horizon:2d}"
+            f" named={row.named_state} canon={row.canonical_state}"
+            f" ptype={row.packet_type} gaps={row.packet_gaps}"
+            f" occ={row.occupancy_probability:.6f}"
+            f" active={repair.active_candidate_count}"
+            f" success={repair.success}"
+        )
+        print(f"  original winner probs={_format_float_tuple(row.winner_probabilities)}")
+        print(f"  original residual l1={row.l1_error:.6f} linf={row.linf_error:.6f} diff={original_diff}")
+        print(f"  repaired winner probs={_format_float_tuple(repair.repaired_winner_probabilities)}")
+        print(
+            f"  repaired residual l1={repair.repaired_l1_error:.6f}"
+            f" linf={repair.repaired_linf_error:.6f}"
+            f" diff={repaired_diff}"
+        )
+        print(f"  repaired message={repair.message}")
+        print("  repaired support:")
+        for weight, action, signature, orbit_key in repair.support[:support_n]:
+            print(
+                f"    {_format_action(action)}"
+                f" edge={_format_edge_signature(signature)}"
+                f" orbit={orbit_key}"
+                f" weight={weight:.6f}"
+            )
+        if len(repair.support) > support_n:
+            print(f"    ... {len(repair.support) - support_n} more")
+        print()
+
+
 def _length_parity_category(lengths: tuple[int, ...]) -> str:
     has_odd = any(length % 2 == 1 for length in lengths)
     has_even = any(length % 2 == 0 for length in lengths)
@@ -5686,6 +6052,17 @@ def _build_parser() -> argparse.ArgumentParser:
     probability_matching_named_residuals_parser.add_argument("--orbit-n", type=int, default=8)
     probability_matching_named_residuals_parser.add_argument("-n", type=int, default=30)
 
+    probability_matching_dual_face_repair_parser = subparsers.add_parser("probability-matching-dual-face-repair")
+    probability_matching_dual_face_repair_parser.add_argument("--k", type=int, required=True)
+    probability_matching_dual_face_repair_parser.add_argument("--T", type=int, required=True)
+    probability_matching_dual_face_repair_parser.add_argument("--library", required=True)
+    probability_matching_dual_face_repair_parser.add_argument("--packet-type")
+    probability_matching_dual_face_repair_parser.add_argument("--packet-gaps")
+    probability_matching_dual_face_repair_parser.add_argument("--support-tolerance", type=float, default=1e-8)
+    probability_matching_dual_face_repair_parser.add_argument("--active-tolerance", type=float, default=1e-8)
+    probability_matching_dual_face_repair_parser.add_argument("--support-n", type=int, default=12)
+    probability_matching_dual_face_repair_parser.add_argument("-n", type=int, default=20)
+
     return parser
 
 
@@ -5968,6 +6345,19 @@ def main() -> None:
             support_tolerance=args.support_tolerance,
             n=args.n,
             orbit_n=args.orbit_n,
+        )
+        return
+    if args.command == "probability-matching-dual-face-repair":
+        print_probability_matching_dual_face_repair(
+            args.k,
+            args.T,
+            args.library,
+            packet_type_filter=_parse_int_tuple(args.packet_type) if args.packet_type else None,
+            packet_gaps_filter=_parse_int_tuple(args.packet_gaps) if args.packet_gaps else None,
+            support_tolerance=args.support_tolerance,
+            active_tolerance=args.active_tolerance,
+            n=args.n,
+            support_n=args.support_n,
         )
         return
     raise ValueError(f"unknown command: {args.command}")

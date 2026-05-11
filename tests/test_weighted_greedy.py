@@ -39,8 +39,10 @@ from expert_game_lab.experiments import (
     print_k3_motif_sweep,
     print_k9_motif_library_sweep,
     print_probability_matching_inspect,
+    print_probability_matching_dual_face_repair,
     print_probability_matching_named_inspect,
     print_probability_matching_named_residuals,
+    probability_matching_dual_face_repair_rows,
     summarize_weighted_greedy_by_packet,
     summarize_weighted_greedy_by_regime,
     print_top_prefix_length_regimes,
@@ -525,6 +527,26 @@ def test_probability_matching_named_residuals_printer_runs(capsys: pytest.Captur
     captured = capsys.readouterr()
     assert "Named probability matching residuals" in captured.out
     assert "Top canonical-state residual aggregates" in captured.out
+
+
+def test_probability_matching_dual_face_repair_keeps_k3_zero_residual() -> None:
+    _, repair_rows = probability_matching_dual_face_repair_rows(3, 4, "all_three", n=5)
+
+    assert repair_rows
+    assert all(row.success for row in repair_rows)
+    assert sum(row.original_weighted_l1_error for row in repair_rows) == pytest.approx(0.0)
+    assert sum(row.repaired_weighted_l1_error for row in repair_rows) == pytest.approx(0.0, abs=1e-7)
+    assert sum(row.repaired_weighted_linf_error for row in repair_rows) <= (
+        sum(row.original_weighted_linf_error for row in repair_rows) + 1e-7
+    )
+
+
+def test_probability_matching_dual_face_repair_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_probability_matching_dual_face_repair(3, 4, "all_three", n=2)
+
+    captured = capsys.readouterr()
+    assert "Probability matching dual-face repair" in captured.out
+    assert "Top repaired rows" in captured.out
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:
