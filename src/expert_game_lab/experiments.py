@@ -593,6 +593,21 @@ class CoarseTemplateAggregate:
     representative_support: tuple[tuple[float, tuple[int, ...], tuple[int, ...], tuple[int, ...]], ...]
 
 
+@dataclass(frozen=True)
+class SkeletonPlacementAggregate:
+    family_name: str
+    signature: object
+    row_count: int
+    total_occupancy: float
+    horizons: tuple[tuple[int, int], ...]
+    representative: TwoRunReplayTemplateRow
+    packet_type_histogram: tuple[tuple[tuple[int, ...], int], ...]
+    packet_gaps_histogram: tuple[tuple[tuple[int, ...], int], ...]
+    adjacent_gaps_histogram: tuple[tuple[tuple[int, ...], int], ...]
+    top_states_by_occupancy: tuple[tuple[tuple[int, ...], float], ...]
+    label: str
+
+
 def _format_action(action: tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in action)
 
@@ -4377,6 +4392,162 @@ def print_two_run_replay_coarse_template_report(
         print()
 
 
+def _histogram_tuple(values: list[object]) -> tuple[tuple[object, int], ...]:
+    counts: dict[object, int] = defaultdict(int)
+    for value in values:
+        counts[value] += 1
+    return tuple(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
+def _skeleton_label(row: TwoRunReplayTemplateRow) -> str:
+    if row.packet_type == (9,):
+        return "root-special"
+    support = row.support
+    touches_top = sum(1 for _, action, _, _ in support if action[0] == 1)
+    touches_bottom = sum(1 for _, action, _, _ in support if action[-1] == 1)
+    one_counts = {sum(action) for _, action, _, _ in support}
+    if touches_top == 0 and touches_bottom > 0:
+        return "tail-repair"
+    if touches_top == len(support):
+        return "single-anchor"
+    if len(one_counts) > 1:
+        return "split-two-packets"
+    if touches_top > 0 and touches_bottom > 0:
+        return "paired-shoulder"
+    return "central-repair"
+
+
+def _skeleton_placement_aggregates(
+    rows: tuple[TwoRunReplayTemplateRow, ...],
+    family_name: str,
+    signature_fn,
+) -> tuple[SkeletonPlacementAggregate, ...]:
+    grouped: dict[object, list[TwoRunReplayTemplateRow]] = defaultdict(list)
+    for row in rows:
+        grouped[signature_fn(row)].append(row)
+
+    aggregates: list[SkeletonPlacementAggregate] = []
+    for signature, group in grouped.items():
+        representative = max(group, key=lambda row: row.occupancy_probability)
+        state_occupancy: dict[tuple[int, ...], float] = defaultdict(float)
+        for row in group:
+            state_occupancy[row.state] += row.occupancy_probability
+        aggregates.append(
+            SkeletonPlacementAggregate(
+                family_name=family_name,
+                signature=signature,
+                row_count=len(group),
+                total_occupancy=sum(row.occupancy_probability for row in group),
+                horizons=tuple(_histogram_tuple([row.remaining_horizon for row in group])),
+                representative=representative,
+                packet_type_histogram=tuple(_histogram_tuple([row.packet_type for row in group])),
+                packet_gaps_histogram=tuple(_histogram_tuple([row.packet_gaps for row in group])),
+                adjacent_gaps_histogram=tuple(_histogram_tuple([row.adjacent_gaps for row in group])),
+                top_states_by_occupancy=tuple(
+                    sorted(state_occupancy.items(), key=lambda item: (-item[1], item[0]))[:8]
+                ),
+                label=_skeleton_label(representative),
+            )
+        )
+    return tuple(sorted(aggregates, key=lambda item: (-item.total_occupancy, -item.row_count, str(item.signature))))
+
+
+def two_run_skeleton_placement_aggregates(
+    k: int,
+    T: int,
+    support_tolerance: float = 1e-8,
+) -> dict[str, tuple[SkeletonPlacementAggregate, ...]]:
+    rows = two_run_replay_template_rows(k, T, support_tolerance=support_tolerance)
+    return {
+        "action_weight_skeleton": _skeleton_placement_aggregates(rows, "action_weight_skeleton", _coarse_action_weight_skeleton),
+        "edge_weight_skeleton": _skeleton_placement_aggregates(rows, "edge_weight_skeleton", _coarse_edge_weight_skeleton),
+    }
+
+
+def _format_histogram(items: tuple[tuple[object, int], ...], n: int = 6) -> str:
+    rendered = ", ".join(f"{key}:{count}" for key, count in items[:n])
+    if len(items) > n:
+        rendered += ", ..."
+    return rendered
+
+
+def _format_action_geometry(
+    action: tuple[int, ...],
+    weight: float,
+    edge_signature: tuple[int, ...],
+    orbit_key: tuple[int, ...],
+) -> str:
+    one_positions = tuple(index for index, bit in enumerate(action) if bit == 1)
+    touches: list[str] = []
+    if action and action[0] == 1:
+        touches.append("top")
+    if action and action[-1] == 1:
+        touches.append("bottom")
+    if any(action[1:-1]):
+        touches.append("middle")
+    return (
+        f"w={_format_fractionish(weight):>8s}"
+        f" action={_format_action(action)}"
+        f" ones={sum(action)}"
+        f" edge={_format_edge_signature(edge_signature)}"
+        f" runs={tuple(_edge_run_intervals(edge_signature))}"
+        f" one_pos={one_positions}"
+        f" touches={tuple(touches)}"
+        f" orbit={orbit_key}"
+    )
+
+
+def print_two_run_skeleton_placement_report(
+    k: int,
+    T: int,
+    support_tolerance: float = 1e-8,
+    n: int = 80,
+) -> None:
+    aggregates_by_family = two_run_skeleton_placement_aggregates(k, T, support_tolerance=support_tolerance)
+    print(f"Two-run skeleton placement report, k={k}, T={T}")
+    print()
+    print(f"support tolerance: {support_tolerance:.3g}")
+    print()
+    for family_name, aggregates in aggregates_by_family.items():
+        print(f"{family_name}: distinct skeletons={len(aggregates)}")
+    print()
+
+    for family_name, aggregates in aggregates_by_family.items():
+        print(f"{family_name}: top skeletons by occupancy")
+        for index, aggregate in enumerate(sorted(aggregates, key=lambda item: (-item.total_occupancy, -item.row_count, str(item.signature)))[:n], start=1):
+            representative = aggregate.representative
+            print(
+                f"  {index}. label={aggregate.label}"
+                f" rows={aggregate.row_count}"
+                f" occupancy={aggregate.total_occupancy:.6f}"
+                f" horizons={aggregate.horizons}"
+            )
+            print(f"     representative state={representative.state}")
+            print(f"     representative packet={representative.packet_type} gaps={representative.packet_gaps}")
+            print(f"     packet_type hist={_format_histogram(aggregate.packet_type_histogram)}")
+            print(f"     packet_gaps hist={_format_histogram(aggregate.packet_gaps_histogram)}")
+            print(f"     adjacent_gaps hist={_format_histogram(aggregate.adjacent_gaps_histogram)}")
+            print(f"     top states={aggregate.top_states_by_occupancy}")
+            print(f"     signature={_format_coarse_signature(aggregate.signature)}")
+            print("     action geometry:")
+            for weight, action, edge_signature, orbit_key in representative.support[:12]:
+                print(f"       {_format_action_geometry(action, weight, edge_signature, orbit_key)}")
+            if len(representative.support) > 12:
+                print("       ...")
+        print()
+
+        print(f"{family_name}: top skeletons by row count")
+        for index, aggregate in enumerate(sorted(aggregates, key=lambda item: (-item.row_count, -item.total_occupancy, str(item.signature)))[:n], start=1):
+            print(
+                f"  {index}. label={aggregate.label}"
+                f" rows={aggregate.row_count}"
+                f" occupancy={aggregate.total_occupancy:.6f}"
+                f" horizons={aggregate.horizons}"
+                f" signature={_format_coarse_signature(aggregate.signature)}"
+            )
+        print()
+
+
 def print_library_lp_dual_orbits(
     k: int,
     T: int,
@@ -7690,6 +7861,12 @@ def _build_parser() -> argparse.ArgumentParser:
     two_run_replay_coarse_template_report_parser.add_argument("--support-tolerance", type=float, default=1e-8)
     two_run_replay_coarse_template_report_parser.add_argument("-n", type=int, default=80)
 
+    two_run_skeleton_placement_report_parser = subparsers.add_parser("two-run-skeleton-placement-report")
+    two_run_skeleton_placement_report_parser.add_argument("--k", type=int, required=True)
+    two_run_skeleton_placement_report_parser.add_argument("--T", type=int, required=True)
+    two_run_skeleton_placement_report_parser.add_argument("--support-tolerance", type=float, default=1e-8)
+    two_run_skeleton_placement_report_parser.add_argument("-n", type=int, default=80)
+
     return parser
 
 
@@ -8035,6 +8212,14 @@ def main() -> None:
         return
     if args.command == "two-run-replay-coarse-template-report":
         print_two_run_replay_coarse_template_report(
+            args.k,
+            args.T,
+            support_tolerance=args.support_tolerance,
+            n=args.n,
+        )
+        return
+    if args.command == "two-run-skeleton-placement-report":
+        print_two_run_skeleton_placement_report(
             args.k,
             args.T,
             support_tolerance=args.support_tolerance,
