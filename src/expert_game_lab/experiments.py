@@ -582,6 +582,17 @@ class TwoRunReplayTemplateRow:
     support: tuple[tuple[float, tuple[int, ...], tuple[int, ...], tuple[int, ...]], ...]
 
 
+@dataclass(frozen=True)
+class CoarseTemplateAggregate:
+    signature: object
+    row_count: int
+    total_occupancy: float
+    horizons: tuple[int, ...]
+    representative_state: tuple[int, ...]
+    representative_packet_regimes: tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]
+    representative_support: tuple[tuple[float, tuple[int, ...], tuple[int, ...], tuple[int, ...]], ...]
+
+
 def _format_action(action: tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in action)
 
@@ -4225,6 +4236,147 @@ def print_two_run_replay_template_report(
         print()
 
 
+def _coarse_edge_weight_skeleton(row: TwoRunReplayTemplateRow) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (edge_signature, _format_fractionish(weight))
+        for edge_signature, weight in sorted(row.support_edge_signature_weights)
+    )
+
+
+def _coarse_action_weight_skeleton(row: TwoRunReplayTemplateRow) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (_format_action(action), _format_fractionish(weight))
+        for weight, action, _, _ in sorted(row.support, key=lambda item: (_format_action(item[1]), item[0]))
+    )
+
+
+def _coarse_weight_multiset_skeleton(row: TwoRunReplayTemplateRow) -> tuple[int, str, tuple[str, ...]]:
+    return (
+        row.support_action_count,
+        row.run_profile,
+        tuple(sorted((_format_fractionish(weight) for weight, *_ in row.support), reverse=True)),
+    )
+
+
+def _coarse_orbit_weight_shape(row: TwoRunReplayTemplateRow) -> tuple[tuple[tuple[str, ...], str], ...]:
+    packet_sizes = row.packet_type
+    entries: list[tuple[tuple[str, ...], str]] = []
+    for orbit_key, weight in row.support_orbit_key_weights:
+        exposures = tuple(
+            _format_fractionish(ones / packet_size if packet_size else 0.0)
+            for ones, packet_size in zip(orbit_key, packet_sizes, strict=True)
+        )
+        entries.append((exposures, _format_fractionish(weight)))
+    return tuple(sorted(entries))
+
+
+def _coarse_successor_shape(row: TwoRunReplayTemplateRow) -> tuple[tuple[tuple[int, ...], str], ...]:
+    return tuple(
+        (ptype, _format_fractionish(weight))
+        for ptype, weight in sorted(row.successor_packet_type_weights)
+    )
+
+
+def _coarse_template_aggregates(
+    rows: tuple[TwoRunReplayTemplateRow, ...],
+    signature_fn,
+) -> tuple[CoarseTemplateAggregate, ...]:
+    grouped: dict[object, list[TwoRunReplayTemplateRow]] = defaultdict(list)
+    for row in rows:
+        grouped[signature_fn(row)].append(row)
+
+    aggregates: list[CoarseTemplateAggregate] = []
+    for signature, group in grouped.items():
+        representative = max(group, key=lambda row: row.occupancy_probability)
+        packet_regimes = tuple(
+            sorted({(row.packet_type, row.packet_gaps) for row in group})[:8]
+        )
+        aggregates.append(
+            CoarseTemplateAggregate(
+                signature=signature,
+                row_count=len(group),
+                total_occupancy=sum(row.occupancy_probability for row in group),
+                horizons=tuple(sorted({row.remaining_horizon for row in group}, reverse=True)),
+                representative_state=representative.state,
+                representative_packet_regimes=packet_regimes,
+                representative_support=representative.support,
+            )
+        )
+    return tuple(sorted(aggregates, key=lambda item: (-item.total_occupancy, -item.row_count, str(item.signature))))
+
+
+def two_run_replay_coarse_template_aggregates(
+    k: int,
+    T: int,
+    support_tolerance: float = 1e-8,
+) -> dict[str, tuple[CoarseTemplateAggregate, ...]]:
+    rows = two_run_replay_template_rows(k, T, support_tolerance=support_tolerance)
+    return {
+        "edge_weight_skeleton": _coarse_template_aggregates(rows, _coarse_edge_weight_skeleton),
+        "action_weight_skeleton": _coarse_template_aggregates(rows, _coarse_action_weight_skeleton),
+        "weight_multiset_skeleton": _coarse_template_aggregates(rows, _coarse_weight_multiset_skeleton),
+        "orbit_weight_shape": _coarse_template_aggregates(rows, _coarse_orbit_weight_shape),
+        "successor_shape": _coarse_template_aggregates(rows, _coarse_successor_shape),
+    }
+
+
+def _format_coarse_signature(signature: object, max_length: int = 240) -> str:
+    rendered = str(signature)
+    if len(rendered) <= max_length:
+        return rendered
+    return rendered[: max_length - 4] + " ..."
+
+
+def print_two_run_replay_coarse_template_report(
+    k: int,
+    T: int,
+    support_tolerance: float = 1e-8,
+    n: int = 80,
+) -> None:
+    rows = two_run_replay_template_rows(k, T, support_tolerance=support_tolerance)
+    aggregates_by_family = two_run_replay_coarse_template_aggregates(k, T, support_tolerance=support_tolerance)
+
+    print(f"Two-run replay coarse template report, k={k}, T={T}")
+    print()
+    print(f"support tolerance: {support_tolerance:.3g}")
+    print(f"total replay states: {len(rows)}")
+    print()
+    print("Distinct counts by coarse signature family:")
+    for family_name, aggregates in aggregates_by_family.items():
+        print(f"  {family_name}: {len(aggregates)}")
+    print()
+
+    for family_name, aggregates in aggregates_by_family.items():
+        print(f"{family_name}: top by occupancy")
+        for index, aggregate in enumerate(sorted(aggregates, key=lambda item: (-item.total_occupancy, -item.row_count, str(item.signature)))[:n], start=1):
+            print(
+                f"  {index}. rows={aggregate.row_count}"
+                f" occupancy={aggregate.total_occupancy:.6f}"
+                f" horizons={aggregate.horizons}"
+            )
+            print(f"     signature={_format_coarse_signature(aggregate.signature)}")
+            print(f"     representative state={aggregate.representative_state}")
+            print(f"     packet regimes={aggregate.representative_packet_regimes}")
+            support = ", ".join(
+                f"{_format_fractionish(weight)}:{_format_action(action)}"
+                for weight, action, _, _ in aggregate.representative_support[:8]
+            )
+            if len(aggregate.representative_support) > 8:
+                support += ", ..."
+            print(f"     support={support}")
+        print()
+
+        print(f"{family_name}: top by row count")
+        for index, aggregate in enumerate(sorted(aggregates, key=lambda item: (-item.row_count, -item.total_occupancy, str(item.signature)))[:n], start=1):
+            print(
+                f"  {index}. rows={aggregate.row_count}"
+                f" occupancy={aggregate.total_occupancy:.6f}"
+                f" horizons={aggregate.horizons}"
+                f" signature={_format_coarse_signature(aggregate.signature)}"
+            )
+        print()
+
+
 def print_library_lp_dual_orbits(
     k: int,
     T: int,
@@ -7532,6 +7684,12 @@ def _build_parser() -> argparse.ArgumentParser:
     two_run_replay_template_report_parser.add_argument("--support-tolerance", type=float, default=1e-8)
     two_run_replay_template_report_parser.add_argument("-n", type=int, default=40)
 
+    two_run_replay_coarse_template_report_parser = subparsers.add_parser("two-run-replay-coarse-template-report")
+    two_run_replay_coarse_template_report_parser.add_argument("--k", type=int, required=True)
+    two_run_replay_coarse_template_report_parser.add_argument("--T", type=int, required=True)
+    two_run_replay_coarse_template_report_parser.add_argument("--support-tolerance", type=float, default=1e-8)
+    two_run_replay_coarse_template_report_parser.add_argument("-n", type=int, default=80)
+
     return parser
 
 
@@ -7869,6 +8027,14 @@ def main() -> None:
         return
     if args.command == "two-run-replay-template-report":
         print_two_run_replay_template_report(
+            args.k,
+            args.T,
+            support_tolerance=args.support_tolerance,
+            n=args.n,
+        )
+        return
+    if args.command == "two-run-replay-coarse-template-report":
+        print_two_run_replay_coarse_template_report(
             args.k,
             args.T,
             support_tolerance=args.support_tolerance,

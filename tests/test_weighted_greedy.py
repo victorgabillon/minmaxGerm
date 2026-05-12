@@ -40,6 +40,7 @@ from expert_game_lab.experiments import (
     print_library_lp_dual_orbit_completion,
     print_library_lp_dual_orbits,
     print_two_run_replay_template_report,
+    print_two_run_replay_coarse_template_report,
     print_k3_motif_sweep,
     print_k9_motif_library_sweep,
     print_probability_matching_inspect,
@@ -71,6 +72,7 @@ from expert_game_lab.experiments import (
     top_prefix_tie_analysis,
     two_run_orbit_mixture_v1_policy,
     two_run_dual_support_replay_k9_T7_policy,
+    two_run_replay_coarse_template_aggregates,
     two_run_replay_template_rows,
     weighted_top_prefix_oracle_labels,
 )
@@ -758,6 +760,28 @@ def test_two_run_replay_template_report_printer_runs(capsys: pytest.CaptureFixtu
     captured = capsys.readouterr()
     assert "Two-run replay template report" in captured.out
     assert "total distinct support templates" in captured.out
+
+
+def test_two_run_replay_coarse_template_aggregates_are_nonempty() -> None:
+    aggregates = two_run_replay_coarse_template_aggregates(9, 7)
+
+    assert aggregates
+    assert set(aggregates) == {
+        "edge_weight_skeleton",
+        "action_weight_skeleton",
+        "weight_multiset_skeleton",
+        "orbit_weight_shape",
+        "successor_shape",
+    }
+    assert all(aggregates[family] for family in aggregates)
+
+
+def test_two_run_replay_coarse_template_report_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_two_run_replay_coarse_template_report(9, 7, n=2)
+
+    captured = capsys.readouterr()
+    assert "Two-run replay coarse template report" in captured.out
+    assert "edge_weight_skeleton" in captured.out
 
 
 def test_evaluate_time_dependent_policy_runs_on_toy_policy() -> None:
