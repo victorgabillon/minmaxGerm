@@ -17,6 +17,7 @@ from expert_game_lab.experiments import (
     _prefix_one_run_action_library,
     _prefix_plus_tail_anchor_action_library,
     _terminal_named_winner_probabilities,
+    _two_run_dual_support_replay_table_k9_T7,
     _local_edge_action_library,
     _top_prefix_length_from_policy,
     evaluate_top_prefix_oracle,
@@ -46,7 +47,10 @@ from expert_game_lab.experiments import (
     print_probability_matching_named_residuals,
     probability_matching_dual_face_repair_rows,
     explicit_policy_benchmark_rows,
+    explicit_time_policy_benchmark_rows,
+    evaluate_time_dependent_policy,
     print_explicit_policy_benchmark,
+    print_explicit_time_policy_benchmark,
     print_strategy_class_relative_benchmark,
     print_strategy_class_benchmark,
     strategy_class_relative_benchmark_rows,
@@ -65,6 +69,7 @@ from expert_game_lab.experiments import (
     top_prefix_restricted_optimal,
     top_prefix_tie_analysis,
     two_run_orbit_mixture_v1_policy,
+    two_run_dual_support_replay_k9_T7_policy,
     weighted_top_prefix_oracle_labels,
 )
 from expert_game_lab.policies import comb_policy, packet_minimal_frontier_policy
@@ -717,6 +722,58 @@ def test_explicit_policy_benchmark_printer_runs(capsys: pytest.CaptureFixture[st
     captured = capsys.readouterr()
     assert "Explicit policy benchmark" in captured.out
     assert "two_run_orbit_mixture_v1" in captured.out
+
+
+def test_two_run_dual_support_replay_table_contains_root() -> None:
+    table = _two_run_dual_support_replay_table_k9_T7()
+    root_policy = table[(7, (0,) * 9)]
+
+    assert root_policy
+    assert sum(probability for probability, _ in root_policy) == pytest.approx(1.0)
+
+
+def test_two_run_dual_support_replay_policy_returns_distribution() -> None:
+    policy = two_run_dual_support_replay_k9_T7_policy((0,) * 9, 7)
+
+    assert policy
+    assert sum(probability for probability, _ in policy) == pytest.approx(1.0)
+    assert all(len(action) == 9 for _, action in policy)
+
+
+def test_evaluate_time_dependent_policy_runs_on_toy_policy() -> None:
+    def toy_policy(state: tuple[int, ...], remaining_horizon: int) -> tuple[tuple[float, tuple[int, ...]], ...]:
+        del state, remaining_horizon
+        return ((0.5, (1, 0, 0)), (0.5, (0, 1, 1)))
+
+    values = evaluate_time_dependent_policy(3, 2, toy_policy)
+
+    assert (0, 0, 0) in values[2]
+
+
+def test_explicit_time_policy_benchmark_rows_run() -> None:
+    rows, skipped = explicit_time_policy_benchmark_rows(
+        ((9, 2),),
+        ("two_run_dual_support_replay_k9_T7", "top_prefix_three_regime_v6"),
+        include_reference=False,
+    )
+
+    assert not skipped
+    assert {row.policy_name for row in rows} == {
+        "two_run_dual_support_replay_k9_T7",
+        "top_prefix_three_regime_v6",
+    }
+
+
+def test_explicit_time_policy_benchmark_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_explicit_time_policy_benchmark(
+        ((9, 2),),
+        ("two_run_dual_support_replay_k9_T7",),
+        include_reference=False,
+    )
+
+    captured = capsys.readouterr()
+    assert "Explicit time-dependent policy benchmark" in captured.out
+    assert "two_run_dual_support_replay_k9_T7" in captured.out
 
 
 def test_weighted_greedy_filter_matches_requested_regime() -> None:

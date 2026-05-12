@@ -4,6 +4,7 @@ import argparse
 import time
 from collections import defaultdict
 from dataclasses import dataclass
+from functools import lru_cache
 from itertools import combinations, product
 from math import comb
 
@@ -916,6 +917,12 @@ def _merge_policy_terms(
     )
 
 
+def _policy_from_weighted_actions(
+    weighted_actions: tuple[tuple[float, tuple[int, ...]], ...],
+) -> tuple[tuple[float, tuple[int, ...]], ...]:
+    return _merge_policy_terms([(float(weight), action) for weight, action in weighted_actions])
+
+
 def _exchangeable_actions_for_orbit_key(
     state: tuple[int, ...],
     orbit_key: tuple[int, ...],
@@ -1001,6 +1008,33 @@ def two_run_orbit_mixture_v1_policy(
     if weighted_orbits is None:
         return tuple((float(probability), action) for probability, action in top_prefix_three_regime_v6_policy(canonical_state))
     return _exchangeable_orbit_mixture_policy(canonical_state, weighted_orbits, max_runs=2)
+
+
+@lru_cache(maxsize=1)
+def _two_run_dual_support_replay_table_k9_T7(
+    support_tolerance: float = 1e-8,
+) -> dict[tuple[int, tuple[int, ...]], tuple[tuple[float, tuple[int, ...]], ...]]:
+    _, rows = library_lp_dual_inspect_rows(9, 7, "two_run", support_tolerance=support_tolerance)
+    table: dict[tuple[int, tuple[int, ...]], tuple[tuple[float, tuple[int, ...]], ...]] = {}
+    for row in rows:
+        table[(row.remaining_horizon, row.state)] = _policy_from_weighted_actions(
+            tuple((weight, action) for weight, action, _ in row.support)
+        )
+    return table
+
+
+def two_run_dual_support_replay_k9_T7_policy(
+    state: tuple[int, ...],
+    remaining_horizon: int,
+) -> tuple[tuple[float, tuple[int, ...]], ...]:
+    canonical_state = canon(state)
+    if len(canonical_state) != 9 or remaining_horizon < 1 or remaining_horizon > 7:
+        return tuple((float(probability), action) for probability, action in top_prefix_three_regime_v6_policy(canonical_state))
+    table = _two_run_dual_support_replay_table_k9_T7()
+    replay_policy = table.get((remaining_horizon, canonical_state))
+    if replay_policy is None:
+        return tuple((float(probability), action) for probability, action in top_prefix_three_regime_v6_policy(canonical_state))
+    return replay_policy
 
 
 def _parse_int_tuple(text: str) -> tuple[int, ...]:
@@ -4753,6 +4787,207 @@ def explicit_policy_benchmark_rows(
     return tuple(rows), tuple(skipped)
 
 
+def evaluate_time_dependent_policy(k: int, T: int, policy_fn) -> list[dict[tuple[int, ...], float]]:
+    if T < 0:
+        raise ValueError("T must be nonnegative")
+
+    state_layers = [tuple(all_states(k, used)) for used in range(T + 1)]
+    values: list[dict[tuple[int, ...], float]] = [
+        {state: float(max(state, default=0)) for state in state_layers[T]}
+    ]
+
+    for horizon in range(1, T + 1):
+        previous = values[horizon - 1]
+        current: dict[tuple[int, ...], float] = {}
+        for state in state_layers[T - horizon]:
+            policy = policy_fn(state, horizon)
+            expected_value = 0.0
+            expected_action_vector = np.zeros(k)
+            for probability, action in policy:
+                expected_action_vector += probability * np.asarray(action, dtype=float)
+                expected_value += probability * _next_state_value(state, action, previous)
+            current[state] = expected_value - float(expected_action_vector.max(initial=0.0))
+        values.append(current)
+    return values
+
+
+def _time_dependent_policy_registry() -> dict[str, object]:
+    return {
+        "two_run_dual_support_replay_k9_T7": two_run_dual_support_replay_k9_T7_policy,
+    }
+
+
+def _resolve_time_dependent_policy(k: int, policy_name: str):
+    time_policies = _time_dependent_policy_registry()
+    if policy_name in time_policies:
+        return time_policies[policy_name]
+    state_policies = _policy_registry(k)
+    if policy_name in state_policies:
+        state_policy = state_policies[policy_name]
+
+        def wrapped_policy(state: tuple[int, ...], remaining_horizon: int):
+            del remaining_horizon
+            return state_policy(state)
+
+        return wrapped_policy
+    return None
+
+
+def explicit_time_policy_benchmark_rows(
+    cases: tuple[tuple[int, int], ...],
+    policy_names: tuple[str, ...],
+    reference_library_name: str = "two_run",
+    include_reference: bool = False,
+) -> tuple[tuple[ExplicitPolicyBenchmarkRow, ...], tuple[str, ...]]:
+    rows: list[ExplicitPolicyBenchmarkRow] = []
+    skipped: list[str] = []
+
+    for k, T in cases:
+        reference_value: float | None = None
+        if include_reference:
+            state_layers = tuple(tuple(all_states(k, used)) for used in range(T + 1))
+            try:
+                reference_actions = _strategy_class_library_actions(k, T, reference_library_name)
+            except ValueError as error:
+                skipped.append(f"k={k} T={T} reference={reference_library_name}: {error}")
+            else:
+                reference_value, _, _ = _library_lp_restricted_values_for_actions(
+                    k,
+                    T,
+                    reference_actions,
+                    state_layers=state_layers,
+                    collect_active_counts=False,
+                )
+        for policy_name in policy_names:
+            policy_fn = _resolve_time_dependent_policy(k, policy_name)
+            if policy_fn is None:
+                skipped.append(f"k={k} T={T} policy={policy_name}: unknown time-dependent policy")
+                continue
+            values = evaluate_time_dependent_policy(k, T, policy_fn)
+            zero = tuple(0 for _ in range(k))
+            value = values[T][zero]
+            gap: float | None = None
+            normalized_gap: float | None = None
+            if reference_value is not None:
+                gap = reference_value - value
+                normalized_gap = gap / (T ** 0.5 if T > 0 else 1.0)
+            rows.append(
+                ExplicitPolicyBenchmarkRow(
+                    k=k,
+                    T=T,
+                    policy_name=policy_name,
+                    value=value,
+                    reference_library_name=reference_library_name if reference_value is not None else None,
+                    reference_value=reference_value,
+                    gap_to_reference=gap,
+                    normalized_gap_to_reference=normalized_gap,
+                )
+            )
+    return tuple(rows), tuple(skipped)
+
+
+def print_explicit_time_policy_benchmark(
+    cases: tuple[tuple[int, int], ...],
+    policy_names: tuple[str, ...],
+    reference_library_name: str = "two_run",
+    include_reference: bool = False,
+) -> None:
+    print("Explicit time-dependent policy benchmark")
+    print()
+    print(f"cases: {cases}")
+    print(f"policies: {policy_names}")
+    print(f"reference library: {reference_library_name}")
+    print(f"include reference: {include_reference}")
+    print()
+    print(
+        "k  T   policy                      V_policy"
+        " reference       V_reference gap_to_reference gap_to_reference/sqrt(T)"
+    )
+
+    skipped: list[str] = []
+    for k, T in cases:
+        case_start = time.perf_counter()
+        print(f"# start case k={k} T={T}", flush=True)
+        reference_value: float | None = None
+        if include_reference:
+            reference_start = time.perf_counter()
+            print(f"# start reference k={k} T={T} library={reference_library_name}", flush=True)
+            state_layers = tuple(tuple(all_states(k, used)) for used in range(T + 1))
+            try:
+                reference_actions = _strategy_class_library_actions(k, T, reference_library_name)
+            except ValueError as error:
+                skipped.append(f"k={k} T={T} reference={reference_library_name}: {error}")
+            else:
+                reference_value, _, _ = _library_lp_restricted_values_for_actions(
+                    k,
+                    T,
+                    reference_actions,
+                    state_layers=state_layers,
+                    collect_active_counts=False,
+                )
+            print(
+                f"# end reference k={k} T={T} library={reference_library_name}"
+                f" elapsed={time.perf_counter() - reference_start:.3f}s",
+                flush=True,
+            )
+        case_rows: list[ExplicitPolicyBenchmarkRow] = []
+        for policy_name in policy_names:
+            policy_fn = _resolve_time_dependent_policy(k, policy_name)
+            if policy_fn is None:
+                skipped.append(f"k={k} T={T} policy={policy_name}: unknown time-dependent policy")
+                continue
+            row_start = time.perf_counter()
+            print(f"# start row k={k} T={T} policy={policy_name}", flush=True)
+            values = evaluate_time_dependent_policy(k, T, policy_fn)
+            zero = tuple(0 for _ in range(k))
+            value = values[T][zero]
+            print(
+                f"# end row k={k} T={T} policy={policy_name}"
+                f" elapsed={time.perf_counter() - row_start:.3f}s",
+                flush=True,
+            )
+            gap: float | None = None
+            normalized_gap: float | None = None
+            if reference_value is not None:
+                gap = reference_value - value
+                normalized_gap = gap / (T ** 0.5 if T > 0 else 1.0)
+            case_rows.append(
+                ExplicitPolicyBenchmarkRow(
+                    k=k,
+                    T=T,
+                    policy_name=policy_name,
+                    value=value,
+                    reference_library_name=reference_library_name if reference_value is not None else None,
+                    reference_value=reference_value,
+                    gap_to_reference=gap,
+                    normalized_gap_to_reference=normalized_gap,
+                )
+            )
+        for row in sorted(
+            case_rows,
+            key=lambda item: (
+                float("inf") if item.normalized_gap_to_reference is None else item.normalized_gap_to_reference,
+                item.policy_name,
+            ),
+        ):
+            print(
+                f"{row.k:1d} {row.T:3d}  {row.policy_name:27s}"
+                f" {row.value:10.6f}"
+                f" {(row.reference_library_name or '-'):15s}"
+                f" {_format_optional_float(row.reference_value):>11s}"
+                f" {_format_optional_float(row.gap_to_reference):>16s}"
+                f" {_format_optional_float(row.normalized_gap_to_reference):>25s}",
+                flush=True,
+            )
+        print(f"# end case k={k} T={T} elapsed={time.perf_counter() - case_start:.3f}s", flush=True)
+    print()
+
+    if skipped:
+        print("Skipped policies/references:")
+        for message in skipped:
+            print(f"  {message}")
+
+
 def print_explicit_policy_benchmark(
     cases: tuple[tuple[int, int], ...],
     policy_names: tuple[str, ...],
@@ -7082,6 +7317,20 @@ def _build_parser() -> argparse.ArgumentParser:
     explicit_policy_benchmark_parser.add_argument("--reference-library", default="two_run")
     explicit_policy_benchmark_parser.add_argument("--include-reference", action="store_true")
 
+    explicit_time_policy_benchmark_parser = subparsers.add_parser("explicit-time-policy-benchmark")
+    explicit_time_policy_benchmark_parser.add_argument(
+        "--cases",
+        default="9:7",
+        help="comma-separated k:T cases, e.g. 9:7",
+    )
+    explicit_time_policy_benchmark_parser.add_argument(
+        "--policies",
+        default="two_run_dual_support_replay_k9_T7",
+        help="comma-separated time-dependent policy names",
+    )
+    explicit_time_policy_benchmark_parser.add_argument("--reference-library", default="two_run")
+    explicit_time_policy_benchmark_parser.add_argument("--include-reference", action="store_true")
+
     return parser
 
 
@@ -7403,6 +7652,14 @@ def main() -> None:
         return
     if args.command == "explicit-policy-benchmark":
         print_explicit_policy_benchmark(
+            _parse_cases(args.cases),
+            _parse_policy_names(args.policies),
+            reference_library_name=args.reference_library,
+            include_reference=args.include_reference,
+        )
+        return
+    if args.command == "explicit-time-policy-benchmark":
+        print_explicit_time_policy_benchmark(
             _parse_cases(args.cases),
             _parse_policy_names(args.policies),
             reference_library_name=args.reference_library,
