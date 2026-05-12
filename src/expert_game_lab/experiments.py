@@ -5,6 +5,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
+from fractions import Fraction
 from itertools import combinations, product
 from math import comb
 
@@ -556,6 +557,29 @@ class DualSupportOrbitSummary:
     expected_action_contribution: tuple[float, ...]
     packet_expected_averages: tuple[float, ...]
     successor_packet_type_weights: tuple[tuple[tuple[int, ...], float], ...]
+
+
+@dataclass(frozen=True)
+class TwoRunReplayTemplateRow:
+    remaining_horizon: int
+    state: tuple[int, ...]
+    packet_type: tuple[int, ...]
+    packet_gaps: tuple[int, ...]
+    adjacent_gaps: tuple[int, ...]
+    occupancy_probability: float
+    support_action_count: int
+    support_edge_signature_weights: tuple[tuple[str, float], ...]
+    support_orbit_key_weights: tuple[tuple[tuple[int, ...], float], ...]
+    successor_packet_type_weights: tuple[tuple[tuple[int, ...], float], ...]
+    full_orbit_compatible: bool
+    sparse_inside_orbit: bool
+    run_profile: str
+    template_signature: tuple[
+        tuple[tuple[tuple[int, ...], str], ...],
+        tuple[tuple[str, str], ...],
+        tuple[tuple[tuple[int, ...], str], ...],
+    ]
+    support: tuple[tuple[float, tuple[int, ...], tuple[int, ...], tuple[int, ...]], ...]
 
 
 def _format_action(action: tuple[int, ...]) -> str:
@@ -4030,6 +4054,177 @@ def _format_float_tuple(values: tuple[float, ...], precision: int = 3) -> str:
     return "(" + ", ".join(f"{value:.{precision}f}" for value in values) + ")"
 
 
+def _format_fractionish(value: float, max_denominator: int = 100) -> str:
+    fraction = Fraction(value).limit_denominator(max_denominator)
+    if abs(float(fraction) - value) <= 1e-8:
+        return f"{fraction.numerator}/{fraction.denominator}" if fraction.denominator != 1 else str(fraction.numerator)
+    return f"{value:.6f}"
+
+
+def _two_run_compatible_orbit_size(
+    state: tuple[int, ...],
+    orbit_key: tuple[int, ...],
+    two_run_actions: tuple[tuple[int, ...], ...],
+) -> int:
+    groups = _packet_index_groups(state)
+    return sum(1 for action in two_run_actions if _orbit_key_for_action(action, groups) == orbit_key)
+
+
+def _two_run_replay_template_from_dual_row(
+    row: LibraryLPDualInspectRow,
+    two_run_actions: tuple[tuple[int, ...], ...],
+) -> TwoRunReplayTemplateRow:
+    groups = _packet_index_groups(row.state)
+    edge_signature_weights: dict[str, float] = defaultdict(float)
+    orbit_key_weights: dict[tuple[int, ...], float] = defaultdict(float)
+    successor_weights: dict[tuple[int, ...], float] = defaultdict(float)
+    support_with_orbits: list[tuple[float, tuple[int, ...], tuple[int, ...], tuple[int, ...]]] = []
+    run_counts: set[int] = set()
+    used_counts_by_orbit: dict[tuple[int, ...], int] = defaultdict(int)
+
+    for weight, action, edge_signature in row.support:
+        orbit_key = _orbit_key_for_action(action, groups)
+        edge_signature_weights[_format_edge_signature(edge_signature)] += weight
+        orbit_key_weights[orbit_key] += weight
+        next_state = canon(tuple(row.state[index] + action[index] for index in range(len(row.state))))
+        successor_weights[packet_type(next_state)] += weight
+        support_with_orbits.append((weight, action, edge_signature, orbit_key))
+        run_count = _edge_signature_run_count(edge_signature)
+        if run_count > 0:
+            run_counts.add(run_count)
+        used_counts_by_orbit[orbit_key] += 1
+
+    full_orbit_compatible = True
+    sparse_inside_orbit = False
+    for orbit_key, used_count in used_counts_by_orbit.items():
+        compatible_count = _two_run_compatible_orbit_size(row.state, orbit_key, two_run_actions)
+        if used_count != compatible_count:
+            full_orbit_compatible = False
+            sparse_inside_orbit = True
+
+    if run_counts <= {1}:
+        run_profile = "one-run only"
+    elif run_counts <= {2}:
+        run_profile = "two-run only"
+    else:
+        run_profile = "mixed one/two-run"
+
+    orbit_weights = tuple(sorted(orbit_key_weights.items(), key=lambda item: (-item[1], item[0])))
+    edge_weights = tuple(sorted(edge_signature_weights.items(), key=lambda item: (-item[1], item[0])))
+    successor_packet_type_weights = tuple(sorted(successor_weights.items(), key=lambda item: (-item[1], item[0])))
+    template_signature = (
+        tuple((orbit_key, _format_fractionish(weight)) for orbit_key, weight in orbit_weights),
+        tuple((edge_signature, _format_fractionish(weight)) for edge_signature, weight in edge_weights),
+        tuple((ptype, _format_fractionish(weight)) for ptype, weight in successor_packet_type_weights),
+    )
+
+    return TwoRunReplayTemplateRow(
+        remaining_horizon=row.remaining_horizon,
+        state=row.state,
+        packet_type=row.packet_type,
+        packet_gaps=row.packet_gaps,
+        adjacent_gaps=row.adjacent_gaps,
+        occupancy_probability=row.occupancy_probability,
+        support_action_count=len(row.support),
+        support_edge_signature_weights=edge_weights,
+        support_orbit_key_weights=orbit_weights,
+        successor_packet_type_weights=successor_packet_type_weights,
+        full_orbit_compatible=full_orbit_compatible,
+        sparse_inside_orbit=sparse_inside_orbit,
+        run_profile=run_profile,
+        template_signature=template_signature,
+        support=tuple(sorted(support_with_orbits, key=lambda item: (-item[0], _format_action(item[1])))),
+    )
+
+
+def two_run_replay_template_rows(
+    k: int,
+    T: int,
+    support_tolerance: float = 1e-8,
+) -> tuple[TwoRunReplayTemplateRow, ...]:
+    if k != 9 or T != 7:
+        raise ValueError("two-run replay template report is currently implemented for k=9,T=7")
+    two_run_actions = _action_library(k, "two_run", T=T)
+    _, dual_rows = library_lp_dual_inspect_rows(k, T, "two_run", support_tolerance=support_tolerance)
+    return tuple(_two_run_replay_template_from_dual_row(row, two_run_actions) for row in dual_rows)
+
+
+def _format_weighted_tuple_items(items: tuple[tuple[object, float], ...], max_items: int = 8) -> str:
+    visible = [f"{key}:{_format_fractionish(weight)}" for key, weight in items[:max_items]]
+    if len(items) > max_items:
+        visible.append("...")
+    return ", ".join(visible)
+
+
+def print_two_run_replay_template_report(
+    k: int,
+    T: int,
+    support_tolerance: float = 1e-8,
+    n: int = 40,
+) -> None:
+    rows = two_run_replay_template_rows(k, T, support_tolerance=support_tolerance)
+    regimes = {(row.packet_type, row.packet_gaps) for row in rows}
+    templates = {row.template_signature for row in rows}
+
+    print(f"Two-run replay template report, k={k}, T={T}")
+    print()
+    print(f"support tolerance: {support_tolerance:.3g}")
+    print(f"total replay states: {len(rows)}")
+    print(f"total distinct packet regimes: {len(regimes)}")
+    print(f"total distinct support templates: {len(templates)}")
+    print()
+
+    regime_counts: dict[tuple[tuple[int, ...], tuple[int, ...]], int] = defaultdict(int)
+    regime_occupancy: dict[tuple[tuple[int, ...], tuple[int, ...]], float] = defaultdict(float)
+    horizon_regime_counts: dict[tuple[int, tuple[int, ...], tuple[int, ...]], int] = defaultdict(int)
+    template_rows: dict[object, list[TwoRunReplayTemplateRow]] = defaultdict(list)
+    for row in rows:
+        regime_key = (row.packet_type, row.packet_gaps)
+        regime_counts[regime_key] += 1
+        regime_occupancy[regime_key] += row.occupancy_probability
+        horizon_regime_counts[(row.remaining_horizon, row.packet_type, row.packet_gaps)] += 1
+        template_rows[row.template_signature].append(row)
+
+    print("Top regimes by occupancy:")
+    for (ptype, gaps), occupancy in sorted(regime_occupancy.items(), key=lambda item: (-item[1], item[0]))[:n]:
+        print(f"  packet type={ptype} gaps={gaps} rows={regime_counts[(ptype, gaps)]} occupancy={occupancy:.6f}")
+    print()
+
+    print("Top horizon/regime rows by count:")
+    for (remaining, ptype, gaps), count in sorted(horizon_regime_counts.items(), key=lambda item: (-item[1], item[0]))[:n]:
+        print(f"  rem={remaining} packet type={ptype} gaps={gaps} rows={count}")
+    print()
+
+    print("Top support templates by row count:")
+    top_templates = sorted(template_rows.items(), key=lambda item: (-len(item[1]), item[1][0].remaining_horizon, item[1][0].state))[:n]
+    for index, (_, template_group) in enumerate(top_templates, start=1):
+        representative = template_group[0]
+        horizons = tuple(sorted({row.remaining_horizon for row in template_group}, reverse=True))
+        packet_regimes = tuple(sorted({(row.packet_type, row.packet_gaps) for row in template_group}))
+        print(f"Template {index}: rows={len(template_group)}")
+        print(f"  representative rem={representative.remaining_horizon} state={representative.state}")
+        print(f"  horizons={horizons}")
+        print(f"  packet regimes={packet_regimes[:8]}{' ...' if len(packet_regimes) > 8 else ''}")
+        print(f"  support count={representative.support_action_count}")
+        print(f"  run profile={representative.run_profile}")
+        print(f"  full orbit compatible={representative.full_orbit_compatible}")
+        print(f"  sparse inside orbit={representative.sparse_inside_orbit}")
+        print(f"  orbit weights={_format_weighted_tuple_items(representative.support_orbit_key_weights)}")
+        print(f"  edge signatures={_format_weighted_tuple_items(representative.support_edge_signature_weights)}")
+        print(f"  successors={_format_weighted_tuple_items(representative.successor_packet_type_weights)}")
+        print("  support:")
+        for weight, action, edge_signature, orbit_key in representative.support[:12]:
+            print(
+                f"    w={_format_fractionish(weight):>8s}"
+                f" action={_format_action(action)}"
+                f" edge={_format_edge_signature(edge_signature)}"
+                f" orbit={orbit_key}"
+            )
+        if len(representative.support) > 12:
+            print("    ...")
+        print()
+
+
 def print_library_lp_dual_orbits(
     k: int,
     T: int,
@@ -7331,6 +7526,12 @@ def _build_parser() -> argparse.ArgumentParser:
     explicit_time_policy_benchmark_parser.add_argument("--reference-library", default="two_run")
     explicit_time_policy_benchmark_parser.add_argument("--include-reference", action="store_true")
 
+    two_run_replay_template_report_parser = subparsers.add_parser("two-run-replay-template-report")
+    two_run_replay_template_report_parser.add_argument("--k", type=int, required=True)
+    two_run_replay_template_report_parser.add_argument("--T", type=int, required=True)
+    two_run_replay_template_report_parser.add_argument("--support-tolerance", type=float, default=1e-8)
+    two_run_replay_template_report_parser.add_argument("-n", type=int, default=40)
+
     return parser
 
 
@@ -7664,6 +7865,14 @@ def main() -> None:
             _parse_policy_names(args.policies),
             reference_library_name=args.reference_library,
             include_reference=args.include_reference,
+        )
+        return
+    if args.command == "two-run-replay-template-report":
+        print_two_run_replay_template_report(
+            args.k,
+            args.T,
+            support_tolerance=args.support_tolerance,
+            n=args.n,
         )
         return
     raise ValueError(f"unknown command: {args.command}")

@@ -39,6 +39,7 @@ from expert_game_lab.experiments import (
     print_library_lp_dual_inspect,
     print_library_lp_dual_orbit_completion,
     print_library_lp_dual_orbits,
+    print_two_run_replay_template_report,
     print_k3_motif_sweep,
     print_k9_motif_library_sweep,
     print_probability_matching_inspect,
@@ -70,6 +71,7 @@ from expert_game_lab.experiments import (
     top_prefix_tie_analysis,
     two_run_orbit_mixture_v1_policy,
     two_run_dual_support_replay_k9_T7_policy,
+    two_run_replay_template_rows,
     weighted_top_prefix_oracle_labels,
 )
 from expert_game_lab.policies import comb_policy, packet_minimal_frontier_policy
@@ -738,6 +740,24 @@ def test_two_run_dual_support_replay_policy_returns_distribution() -> None:
     assert policy
     assert sum(probability for probability, _ in policy) == pytest.approx(1.0)
     assert all(len(action) == 9 for _, action in policy)
+
+
+def test_two_run_replay_template_rows_are_nonempty_and_include_root() -> None:
+    rows = two_run_replay_template_rows(9, 7)
+
+    assert rows
+    root_rows = [row for row in rows if row.remaining_horizon == 7 and row.state == (0,) * 9]
+    assert root_rows
+    for row in rows[:10]:
+        assert sum(weight for weight, *_ in row.support) == pytest.approx(1.0)
+
+
+def test_two_run_replay_template_report_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_two_run_replay_template_report(9, 7, n=2)
+
+    captured = capsys.readouterr()
+    assert "Two-run replay template report" in captured.out
+    assert "total distinct support templates" in captured.out
 
 
 def test_evaluate_time_dependent_policy_runs_on_toy_policy() -> None:
