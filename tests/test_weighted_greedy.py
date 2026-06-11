@@ -1,3 +1,5 @@
+from fractions import Fraction
+
 import pytest
 import numpy as np
 
@@ -35,6 +37,18 @@ from expert_game_lab.experiments import (
     _softmax_centered_gradient,
     _k5_comb_support,
     _k5_chase_support,
+    _balanced_action_canonical_key,
+    _balanced_action_is_balanced,
+    _balanced_chase_centered_q_for_support,
+    _balanced_chase_old_fixed_q_for_support,
+    _balanced_chase_q_value,
+    _balanced_support_common_marginal,
+    _fraction_support_is_balanced,
+    _k5_balanced_action_symmetry_classes,
+    _k5_chase_balanced_vertex,
+    _k5_chase_orbit_vertices,
+    _k5_comb_balanced_vertex,
+    _k5_symmetrized_chase_support,
     _potential_greedy_choice,
     _random_playout_value_function,
     _random_playout_terminal_winner_probabilities,
@@ -59,6 +73,11 @@ from expert_game_lab.experiments import (
     _gap_bucket,
     _k5_chase_reachable_states,
     _k5_worst_family_state,
+    _k5_packet122_state,
+    _parse_k5_q_audit_states,
+    _rank_chase_future_centered_value,
+    _rank_chase_future_uncentered_value,
+    _min_normalized_descending,
     _k6_mixed_patch_candidates_from_failures,
     _matching_k6_mixed_patch,
     _parse_T_values,
@@ -200,6 +219,188 @@ from expert_game_lab.experiments import (
     random_playout_value_rows,
     random_playout_greedy_rows,
     k5_gap_transition_rows,
+    k5_large_gap_influence_cone_certificate_rows,
+    k5_large_gap_influence_cone_proof_export_rows,
+    k5_large_gap_influence_cone_source_certificate_rows,
+    k5_large_gap_one_leader_symbolic_rows,
+    k5_large_gap_multi_gap_potential_rows,
+    k5_large_gap_barrier_audit_report,
+    k5_large_gap_one_dimensional_barrier_rows,
+    k5_large_gap_one_dimensional_failure_analysis_rows,
+    k5_one_leader_influence_recursive_certificate_rows,
+    k5_balanced_action_vertices,
+    k5_balanced_centered_orbit_defect_rows,
+    k5_balanced_chase_greedy_defect_rows,
+    k5_balanced_chase_orbit_defect_rows,
+    k5_balanced_mdp_gap_scaling_rows,
+    k5_balanced_mdp_gap_scaling_summary,
+    k5_balanced_mdp_value_gap_rows,
+    k5_balanced_varying_c_obstruction_rows,
+    k5_c_half_orbit_flat_equality_holds,
+    k5_c_half_augmented_cone_closure_rows,
+    k5_c_half_augmented_cone_proof_export,
+    k5_c_half_augmented_cone_audit_report,
+    k5_c_half_augmented_cone_small_basis_report_data,
+    k5_c_half_schur_guard_cone_result,
+    k5_c_half_invariant_inequality_closure_rows,
+    k5_c_half_orbit_dual_certificate_rows,
+    k5_c_half_orbit_optimality_certificate_rows,
+    k5_c_half_orbit_optimality_violation_rows,
+    k5_direct_route_finite_quotient_validation_result,
+    k5_direct_route_large_gap_hitting_bound_rows,
+    k5_direct_route_large_gap_influence_decay_rows,
+    k5_direct_route_large_gap_uniform_influence_rows,
+    k5_direct_route_large_gap_domination_rows,
+    k5_full_vs_orbit_delta_rows,
+    k5_full_vs_orbit_delta_supersolution_rows,
+    k5_full_vs_orbit_reachable_delta_rows,
+    k5_full_vs_orbit_reachable_delta_supersolution_rows,
+    k5_full_vs_orbit_time_packet_barrier_growth_packet_rows,
+    k5_full_vs_orbit_time_packet_barrier_growth_summary_rows,
+    k5_full_vs_orbit_time_packet_barrier_residual_rows,
+    k5_full_vs_orbit_time_packet_barrier_rows,
+    k5_low_gap_boundary_and_variance_lemma_rows,
+    k5_low_gap_a0_c1_mechanism_lemma_rows,
+    k5_low_gap_a0_c1_human_proof_rows,
+    k5_low_gap_a0_c1_symbolic_mechanism_proof_rows,
+    k5_low_gap_correction_pattern_proof_rows,
+    k5_low_gap_correction_potential_rows,
+    k5_low_gap_corrected_residual_taxonomy_data,
+    k5_low_gap_corrected_tail_lyapunov_certificate_data,
+    k5_low_gap_exact_residual_recurrence_rows,
+    k5_low_gap_bellman_image_recurrence_rows,
+    k5_low_gap_flat_split_tail_proof_data,
+    k5_low_gap_flat_split_tail_telescoping_chains,
+    k5_low_gap_flat_split_long_tail_rows,
+    k5_low_gap_flat_split_tail_operator_certificate,
+    k5_low_gap_flat_split_tail_contraction_lemma_data,
+    k5_low_gap_flat_split_schema_proof_rows,
+    k5_low_gap_adjacent_merge_schema_proof_rows,
+    k5_low_gap_packet_count_schema_proof_rows,
+    k5_low_gap_finite_residual_schema_proof_rows,
+    k5_low_gap_boundary_schema_proof_rows,
+    k5_low_gap_higher_refinement_schema_proof_rows,
+    k5_low_gap_curvature_gap_action_rows,
+    k5_low_gap_ordered_face_geometry_rows,
+    k5_low_gap_discrete_maximum_principle_components,
+    k5_complement_balancing_symmetry_rows,
+    k5_low_gap_cyclic_component_closure_data,
+    k5_low_gap_boundary_compression_rows,
+    k5_low_gap_boundary_atom_rows,
+    k5_low_gap_packet_convexity_schema_rows,
+    k5_low_gap_pattern_curvature_recurrence_rows,
+    k5_low_gap_richer_tail_envelope_certificate_data,
+    k5_low_gap_scalar_envelope_lyapunov_certificate_data,
+    k5_low_gap_scalar_envelope_exact_proof_certificate_rows,
+    k5_low_gap_scalar_envelope_recurrence_proof_rows,
+    k5_low_gap_scalar_residual_envelope_rows,
+    k5_low_gap_signed_cancellation_identity_rows,
+    k5_low_gap_unified_residual_automaton_certificate_data,
+    k5_orbit_finite_difference_recurrence_rows,
+    k5_packet_barrier_increment_source_rows,
+    k5_variable_c_harmonic_barrier_compression_rows,
+    k5_variable_c_harmonic_barrier_proof_exports,
+    k5_variable_c_harmonic_barrier_lp_results,
+    k5_variable_c_harmonic_barrier_simple_candidate_rows,
+    k5_variable_c_mechanism_domination_rows,
+    print_k5_balanced_action_enumeration_report,
+    print_k5_low_gap_bellman_image_recurrence_report,
+    print_k5_multi_step_bellman_pattern_miner_report,
+    print_k5_low_gap_flat_split_tail_proof_report,
+    print_k5_low_gap_flat_split_tail_telescoping_report,
+    print_k5_low_gap_flat_split_long_tail_limit_report,
+    print_k5_low_gap_flat_split_tail_operator_certificate_report,
+    print_k5_low_gap_flat_split_tail_contraction_lemma_report,
+    print_k5_low_gap_flat_split_schema_proof_report,
+    print_k5_low_gap_adjacent_merge_schema_proof_report,
+    print_k5_low_gap_packet_count_schema_proof_report,
+    print_k5_low_gap_finite_residual_schema_proof_report,
+    print_k5_low_gap_boundary_schema_proof_report,
+    print_k5_low_gap_higher_refinement_schema_proof_report,
+    print_k5_low_gap_curvature_gap_action_grouping_report,
+    print_k5_low_gap_ordered_face_geometry_report,
+    print_k5_low_gap_discrete_maximum_principle_report,
+    print_k5_complement_balancing_symmetry_report,
+    print_k5_low_gap_cyclic_component_closure_report,
+    print_k5_low_gap_boundary_compression_report,
+    print_k5_low_gap_boundary_atom_taxonomy_report,
+    print_k5_low_gap_boundary_atom_symbolic_lemmas_report,
+    print_k5_low_gap_packet_count_gap_closure_report,
+    print_k5_low_gap_refinement_packet_count_fan_report,
+    print_k5_low_gap_maximum_principle_proof_outline_report,
+    print_k5_low_gap_maximum_principle_replacement_section_report,
+    print_k5_balanced_centered_orbit_defect_report,
+    print_k5_balanced_chase_greedy_defect_report,
+    print_k5_balanced_chase_orbit_defect_report,
+    print_k5_balanced_mdp_gap_scaling_report,
+    print_k5_balanced_mdp_value_gap_report,
+    print_k5_balanced_varying_c_obstruction_report,
+    print_k5_c_half_augmented_cone_closure_report,
+    print_k5_c_half_augmented_cone_proof_export_report,
+    print_k5_c_half_augmented_cone_audit_report,
+    print_k5_c_half_augmented_cone_certificate_verify_report,
+    print_k5_c_half_augmented_cone_small_basis_report,
+    print_k5_c_half_schur_guard_cone_report,
+    print_k5_c_half_invariant_cone_closure_report,
+    print_k5_c_half_invariant_inequality_closure_report,
+    print_k5_c_half_orbit_dual_certificate_report,
+    print_k5_c_half_orbit_optimality_certificate_report,
+    print_k5_direct_route_finite_quotient_validation_report,
+    print_k5_direct_route_large_gap_hitting_bound_report,
+    print_k5_direct_route_large_gap_influence_decay_report,
+    print_k5_direct_route_large_gap_uniform_influence_report,
+    print_k5_direct_route_large_gap_domination_report,
+    print_k5_large_gap_influence_cone_certificate_report,
+    print_k5_large_gap_influence_cone_proof_export_report,
+    print_k5_large_gap_influence_cone_source_certificate_report,
+    print_k5_large_gap_one_leader_symbolic_report,
+    print_k5_large_gap_multi_gap_potential_report,
+    print_k5_large_gap_barrier_audit_report,
+    print_k5_large_gap_barrier_certificate_verify_report,
+    print_k5_large_gap_barrier_merge_verify_report,
+    print_k5_large_gap_one_dimensional_barrier_report,
+    print_k5_large_gap_one_dimensional_failure_analysis_report,
+    print_k5_one_leader_influence_recursive_certificate_report,
+    print_k5_full_vs_orbit_delta_barrier_report,
+    print_k5_full_vs_orbit_delta_supersolution_report,
+    print_k5_full_vs_orbit_packet_barrier_growth_inequality_report,
+    print_k5_full_vs_orbit_packet_barrier_recurrence_report,
+    print_k5_full_vs_orbit_reachable_delta_barrier_report,
+    print_k5_full_vs_orbit_time_packet_barrier_growth_report,
+    print_k5_full_vs_orbit_time_packet_barrier_report,
+    print_k5_low_gap_boundary_and_variance_lemmas_report,
+    print_k5_low_gap_a0_c1_mechanism_lemma_report,
+    print_k5_low_gap_a0_c1_human_proof_report,
+    print_k5_low_gap_a0_c1_symbolic_mechanism_proofs_report,
+    print_k5_low_gap_correction_pattern_proof_report,
+    print_k5_low_gap_correction_potential_report,
+    print_k5_low_gap_corrected_residual_taxonomy_report,
+    print_k5_low_gap_corrected_tail_lyapunov_certificate_report,
+    print_k5_low_gap_exact_residual_recurrence_report,
+    print_k5_low_gap_curvature_analytic_proof_report,
+    print_k5_low_gap_packet_convexity_schema_report,
+    print_k5_low_gap_pattern_curvature_recurrence_report,
+    print_k5_low_gap_richer_tail_envelope_certificate_report,
+    print_k5_low_gap_scalar_envelope_lyapunov_certificate_report,
+    print_k5_low_gap_scalar_envelope_lyapunov_certificate_verify_report,
+    print_k5_low_gap_scalar_envelope_exact_proof_certificate_report,
+    print_k5_low_gap_scalar_envelope_recurrence_proof_report,
+    print_k5_low_gap_scalar_residual_envelope_proof_report,
+    print_k5_low_gap_signed_cancellation_identity_report,
+    print_k5_low_gap_lyapunov_certificate_debug_report,
+    print_k5_low_gap_unified_residual_automaton_certificate_report,
+    print_k5_orbit_finite_difference_recurrence_report,
+    print_k5_packet_barrier_increment_source_report,
+    print_k5_packet_barrier_mechanism_source_bound_report,
+    print_k5_variable_c_harmonic_barrier_compression_report,
+    print_k5_variable_c_harmonic_barrier_proof_export_report,
+    print_k5_variable_c_harmonic_barrier_lp_report,
+    print_k5_variable_c_harmonic_barrier_simple_candidates_report,
+    print_k5_variable_c_mechanism_domination_report,
+    _k5_balanced_mdp_full_solution,
+    _k5_balanced_mdp_half_solution,
+    _k5_balanced_mdp_orbit_solution,
+    _k5_chase_orbit_vertices,
     k5_scalar_potential_exchangeability_rows,
     k5_boundary_correction_fit_rows,
     k5_relaxation_certificate_rows,
@@ -208,6 +409,105 @@ from expert_game_lab.experiments import (
     k5_reduced_packet_lp_rows,
     k5_reduced_packet_lp_coverage_rows,
     k5_worst_family_scaling_rows,
+    k5_packet122_asymptotic_equation_rows,
+    print_k5_packet122_asymptotic_equations_report,
+    k5_packet122_q_asymptotic_rows,
+    print_k5_packet122_q_asymptotic_report,
+    print_k5_q_convention_audit,
+    print_k5_normalized_scalar_convention_audit,
+    k5_rank_adaptive_dp_recursion_audit_rows,
+    print_k5_rank_adaptive_dp_recursion_audit,
+    k5_rank_adaptive_curvature_rows,
+    print_k5_rank_adaptive_curvature_report,
+    k5_packet122_curvature_growth_summaries,
+    k5_packet122_curvature_growth_run,
+    print_k5_packet122_curvature_growth_report,
+    k5_packet122_active_regime_rows,
+    k5_packet122_active_regime_run,
+    print_k5_packet122_active_regime_map,
+    k5_packet122_lp_state_probe_rows,
+    print_k5_packet122_lp_state_probe,
+    k5_top3_transition_check_rows,
+    k5_top3_reflected_chain_rows,
+    print_k5_top3_reflected_chain_report,
+    k5_top3_local_time_identity_rows,
+    k5_top3_local_time_curvature_rows,
+    print_k5_top3_local_time_identity_report,
+    _top3_m_value,
+    _top3_m_recurrence_value,
+    _top3_k_from_m,
+    _top3_k_recurrence_value,
+    k5_top3_k_recurrence_rows,
+    print_k5_top3_k_recurrence_report,
+    _top3_candidate_stencils,
+    _top3_expand_stencil,
+    _top3_stencil_value,
+    k5_top3_difference_family_summaries,
+    print_k5_top3_difference_closure_report,
+    _top3_half_hitting_sum,
+    _top3_kernel_term,
+    k5_top3_dense_endpoint_barrier_rows,
+    k5_top3_endpoint_barrier_rows,
+    k5_top3_endpoint_coupling_graph_rows,
+    k5_top3_endpoint_recurrence_rows,
+    k5_top3_ballot_candidate_rows,
+    _top3_endpoint_graph_label_summary,
+    k5_top3_hitting_identity_rows,
+    k5_top3_hitting_kernel_rows,
+    print_k5_top3_hitting_kernel_report,
+    k5_top3_kernel_pairing_rows,
+    print_k5_top3_kernel_pairing_report,
+    k5_top3_telescoping_candidate_rows,
+    k5_top3_parity_telescope_rows,
+    print_k5_top3_endpoint_barrier_report,
+    print_k5_top3_endpoint_coupling_report,
+    print_k5_top3_discrepancy_chain_symbolic_report,
+    _top3_a_term,
+    _fraction_sequence_for_endpoint,
+    k5_top3_discrepancy_generating_recurrence_rows,
+    print_k5_top3_discrepancy_generating_function_report,
+    _top3_signed_endpoint_value,
+    k5_top3_discrepancy_barrier_certificate_rows,
+    print_k5_top3_discrepancy_barrier_certificate_report,
+    k5_top3_endpoint_induction_certificate_rows,
+    print_k5_top3_endpoint_induction_certificate_report,
+    _top3_refined_label_aggregate_value,
+    _top3_refined_aggregate_direct_value,
+    k5_top3_refined_discrepancy_label_scan_rows,
+    print_k5_top3_refined_discrepancy_barrier_report,
+    _top3_cone_form_specs,
+    _top3_cone_form_value,
+    k5_top3_endpoint_cone_form_scan_rows,
+    print_k5_top3_endpoint_cone_certificate_report,
+    k5_top3_endpoint_cone_expansion_rows,
+    print_k5_top3_endpoint_cone_expansion_report,
+    k5_top3_kplus_companion_scan_rows,
+    print_k5_top3_kplus_companion_barrier_report,
+    _top3_endpoint_exact_image_rows,
+    print_k5_top3_endpoint_exact_image_report,
+    _top3_diagonal_discrepancy_value,
+    _top3_diagonal_reflected_boundary_child_value,
+    _top3_diagonal_e1_representation_value,
+    _top3_diagonal_e1_reflected_boundary_contribution,
+    _top3_diagonal_k_image_e1_residual,
+    k5_top3_diagonal_discrepancy_recurrence_rows,
+    _top3_reflected_source_gaussian_envelope_value,
+    _top3_reflected_source_grid,
+    k5_top3_reflected_convolution_analytic_scan_rows,
+    k5_top3_reflected_convolution_gaussian_scan_rows,
+    k5_top3_reflected_gradient_convolution_scan_rows,
+    k5_top3_reflected_boundary_convolution_residual_rows,
+    k5_top3_reflected_boundary_convolution_scan_rows,
+    k5_top3_reflected_source_gaussian_envelope_rows,
+    print_k5_top3_diagonal_discrepancy_hierarchy_report,
+    print_k5_top3_diagonal_heat_kernel_report,
+    print_k5_top3_reflected_gradient_convolution_report,
+    print_k5_top3_reflected_convolution_analytic_bound_report,
+    print_k5_top3_reflected_source_gaussian_report,
+    print_k5_top3_reflected_boundary_convolution_report,
+    k5_top3_endpoint_polytope_closure_rows,
+    print_k5_top3_endpoint_polytope_barrier_report,
+    print_k5_top3_telescoping_identity_report,
     explicit_time_policy_reachable_benchmark_rows,
     k6_alive_trunc_comb_policy,
     k6_alive_trunc_comb_twin3_policy,
@@ -1794,6 +2094,1698 @@ def test_k5_expected_two_step_potential_value_is_symmetric_for_same_action() -> 
     assert left == pytest.approx(right)
 
 
+def test_balanced_action_enumeration_vertices_are_balanced() -> None:
+    vertices = k5_balanced_action_vertices()
+
+    assert len(vertices) == 1293
+    assert all(_balanced_action_is_balanced(vertex.support) for vertex in vertices)
+
+
+def test_balanced_action_enumeration_special_actions_included() -> None:
+    assert _k5_chase_balanced_vertex() is not None
+    assert _k5_comb_balanced_vertex() is not None
+
+
+def test_balanced_action_enumeration_canonicalization_preserves_balance() -> None:
+    chase = _k5_chase_balanced_vertex()
+    assert chase is not None
+
+    assert _balanced_action_canonical_key(chase.support) == chase.canonical_key
+    assert _balanced_action_is_balanced(chase.support)
+
+
+def test_balanced_action_enumeration_has_no_duplicate_canonical_classes() -> None:
+    classes = _k5_balanced_action_symmetry_classes()
+    keys = [key for key, _ in classes]
+
+    assert len(keys) == len(set(keys))
+    assert len(classes) == 25
+
+
+def test_balanced_action_enumeration_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_balanced_action_enumeration_report(n=2)
+
+    captured = capsys.readouterr()
+    assert "k=5 balanced action enumeration report" in captured.out
+    assert "symmetry classes" in captured.out
+    assert "Chase" in captured.out
+
+
+def test_balanced_chase_greedy_defect_rows_are_nonnegative() -> None:
+    rows = k5_balanced_chase_greedy_defect_rows(h_values=(3,), max_used=1)
+
+    assert rows
+    assert all(row.epsilon >= -1e-10 for row in rows)
+
+
+def test_balanced_chase_greedy_defect_chase_q_matches_itself() -> None:
+    chase = _k5_chase_balanced_vertex()
+    assert chase is not None
+
+    state = (1, 0, 0, 0, 0)
+    assert _balanced_chase_q_value(state, 3, chase) == pytest.approx(_balanced_chase_q_value(state, 3, chase))
+
+
+def test_balanced_chase_greedy_defect_report_mentions_competitors(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_balanced_chase_greedy_defect_report(h_values=(3,), max_used=1, n=2)
+
+    captured = capsys.readouterr()
+    assert "balanced Chase greedy defect" in captured.out
+    assert "worst by packet" in captured.out
+    assert "best_competing_balanced_action" in captured.out
+
+
+def test_balanced_chase_orbit_contains_expected_complement_pairs() -> None:
+    supports = {tuple(action for _, action in vertex.support) for vertex in _k5_chase_orbit_vertices()}
+
+    assert ((0, 0, 1, 0, 1), (1, 1, 0, 1, 0)) in supports
+    assert ((0, 1, 0, 1, 0), (1, 0, 1, 0, 1)) in supports
+    assert ((0, 1, 0, 1, 1), (1, 0, 1, 0, 0)) in supports
+
+
+def test_balanced_chase_orbit_defect_raw_reproduces_previous_report() -> None:
+    rows = k5_balanced_chase_orbit_defect_rows(h_values=(10,), max_used=8)
+
+    assert max(row.eps_raw for row in rows) == pytest.approx(0.5)
+
+
+def test_balanced_chase_orbit_defect_is_no_larger_than_raw() -> None:
+    rows = k5_balanced_chase_orbit_defect_rows(h_values=(3,), max_used=1)
+
+    assert rows
+    assert all(row.eps_orbit <= row.eps_raw + 1e-10 for row in rows)
+
+
+def test_balanced_chase_symmetrized_support_is_balanced_and_invariant() -> None:
+    state = (2, 1, 1, 0, 0)
+    support = _k5_symmetrized_chase_support(state)
+
+    assert _fraction_support_is_balanced(support)
+    assert _k5_symmetrized_chase_support((2, 1, 1, 0, 0)) == _k5_symmetrized_chase_support((2, 1, 1, 0, 0))
+
+
+def test_balanced_chase_orbit_defect_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_balanced_chase_orbit_defect_report(h_values=(3,), max_used=1, n=2)
+
+    captured = capsys.readouterr()
+    assert "balanced Chase orbit defect" in captured.out
+    assert "max defects by packet" in captured.out
+    assert "best orbit representatives" in captured.out
+
+
+def test_balanced_centered_orbit_defect_all_vertices_have_common_marginal() -> None:
+    for vertex in k5_balanced_action_vertices():
+        assert _balanced_support_common_marginal(vertex.support) == vertex.marginal
+
+
+def test_balanced_centered_orbit_defect_zero_and_one_actions_equivalent() -> None:
+    state = (2, 1, 1, 0, 0)
+    zero_support = ((Fraction(1), (0, 0, 0, 0, 0)),)
+    one_support = ((Fraction(1), (1, 1, 1, 1, 1)),)
+
+    assert _balanced_chase_centered_q_for_support(state, 5, zero_support) == pytest.approx(
+        _balanced_chase_centered_q_for_support(state, 5, one_support)
+    )
+
+
+def test_balanced_centered_orbit_defect_correction_equals_marginal_minus_half() -> None:
+    state = (8, 0, 0, 0, 0)
+    support = (
+        (Fraction(1, 4), (0, 0, 1, 1, 1)),
+        (Fraction(1, 4), (1, 1, 0, 1, 1)),
+        (Fraction(1, 4), (1, 1, 1, 0, 1)),
+        (Fraction(1, 4), (1, 1, 1, 1, 0)),
+    )
+    old_q = _balanced_chase_old_fixed_q_for_support(state, 10, support)
+    centered_q = _balanced_chase_centered_q_for_support(state, 10, support)
+
+    assert old_q - centered_q == pytest.approx(float(_balanced_support_common_marginal(support) - Fraction(1, 2)))
+
+
+def test_balanced_centered_orbit_defect_previous_raw_report_reproducible() -> None:
+    rows = k5_balanced_centered_orbit_defect_rows(h_values=(10,), max_used=8)
+
+    assert max(row.canonical_raw_eps for row in rows) == pytest.approx(0.5)
+
+
+def test_balanced_centered_orbit_defect_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_balanced_centered_orbit_defect_report(h_values=(3,), max_used=1, n=2)
+
+    captured = capsys.readouterr()
+    assert "balanced centered Chase orbit defect" in captured.out
+    assert "packet (1,4) audit" in captured.out
+    assert "baseline correction samples" in captured.out
+
+
+def test_balanced_varying_c_obstruction_reproduces_one_eighth() -> None:
+    rows = k5_balanced_varying_c_obstruction_rows(h_values=(10,), max_used=1)
+    row = next(item for item in rows if item.state == (1, 0, 0, 0, 0))
+
+    assert row.eps_full == pytest.approx(0.125)
+    assert row.best_c == Fraction(1, 4)
+
+
+def test_balanced_varying_c_obstruction_c_half_defect_zero() -> None:
+    rows = k5_balanced_varying_c_obstruction_rows(h_values=(10,), max_used=2)
+
+    assert max(row.eps_c_half for row in rows) <= 1e-9
+
+
+def test_balanced_varying_c_obstruction_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_balanced_varying_c_obstruction_report(h_values=(3,), max_used=1, n=3)
+
+    captured = capsys.readouterr()
+    assert "varying-c obstruction" in captured.out
+    assert "packet (1,4)" in captured.out
+    assert "best c" in captured.out
+    assert "exact 1/8" in captured.out
+
+
+def test_balanced_mdp_value_gap_orders_initial_values() -> None:
+    rows = k5_balanced_mdp_value_gap_rows(h_values=(1, 2, 3))
+
+    assert rows
+    assert all(row.v_full >= row.v_half - 1e-9 for row in rows)
+    assert all(row.v_half >= row.v_orbit - 1e-9 for row in rows)
+    assert all(row.v_orbit >= row.v_fixed_chase - 1e-9 for row in rows)
+
+
+def test_balanced_mdp_value_gap_h1_reproduces_flat_one_step_values() -> None:
+    row = k5_balanced_mdp_value_gap_rows(h_values=(1,))[0]
+
+    assert row.v_full == pytest.approx(0.8)
+    assert row.v_half == pytest.approx(0.5)
+    assert row.v_orbit == pytest.approx(0.5)
+    assert row.gap_full_minus_orbit == pytest.approx(0.3)
+    assert row.initial_best_c == Fraction(1, 5)
+
+
+def test_balanced_mdp_value_gap_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_balanced_mdp_value_gap_report(h_values=(1, 2), n=3)
+
+    captured = capsys.readouterr()
+    assert "balanced MDP value gap" in captured.out
+    assert "V_full - V_orbit" in captured.out
+    assert "policy c-usage" in captured.out
+    assert "exceptional packets" in captured.out
+
+
+def test_balanced_mdp_value_gap_summary_only_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_balanced_mdp_value_gap_report(h_values=(1, 2), n=3, summary_only=True)
+
+    captured = capsys.readouterr()
+    assert "balanced MDP value gap" in captured.out
+    assert "summary_only: True" in captured.out
+    assert "policy c-usage" not in captured.out
+    assert "exceptional packets" not in captured.out
+
+
+def test_balanced_mdp_gap_scaling_rows_reproduce_flat_gap_ratios() -> None:
+    row = k5_balanced_mdp_gap_scaling_rows(h_values=(1,))[0]
+
+    assert row.gap_full_minus_orbit == pytest.approx(0.3)
+    assert row.gap_full_minus_half == pytest.approx(0.3)
+    assert row.gap_half_minus_orbit == pytest.approx(0.0)
+    assert row.gap_over_sqrt_h == pytest.approx(0.3)
+    assert row.best_first_c == Fraction(1, 5)
+
+
+def test_balanced_mdp_gap_scaling_summary_reports_monotonicity() -> None:
+    summary = k5_balanced_mdp_gap_scaling_summary(h_values=(1, 2, 3, 4), tail_length=3)
+
+    assert summary.max_gap == pytest.approx(0.3)
+    assert summary.argmax_h == 1
+    assert summary.monotonicity_holds
+    assert summary.c_half_orbit_optimality_holds
+    assert summary.tail_horizons == (2, 3, 4)
+
+
+def test_balanced_mdp_gap_scaling_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_balanced_mdp_gap_scaling_report(h_values=(1, 2, 3), tail_length=2)
+
+    captured = capsys.readouterr()
+    assert "balanced MDP gap scaling" in captured.out
+    assert "gap/sqrt(h)" in captured.out
+    assert "monotonicity V_full >= V_half >= V_orbit holds" in captured.out
+    assert "c=1/2 orbit optimality holds on tested flat horizons." in captured.out
+
+
+def test_c_half_orbit_optimality_orbit_actions_are_in_b_half() -> None:
+    assert all(vertex.marginal == Fraction(1, 2) for vertex in _k5_chase_orbit_vertices())
+
+
+def test_c_half_orbit_optimality_rows_have_no_violation_on_small_grid() -> None:
+    rows = k5_c_half_orbit_optimality_violation_rows(h_values=(1, 2, 3), max_used=2)
+
+    assert rows
+    assert max(row.eps_half_orbit for row in rows) <= 1e-10
+
+
+def test_c_half_orbit_optimality_reproduces_flat_gap_scaling() -> None:
+    assert k5_c_half_orbit_flat_equality_holds(h_values=tuple(range(1, 16)))
+
+
+def test_c_half_orbit_optimality_certificate_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_c_half_orbit_optimality_certificate_rows(h_values=(1, 2), max_used=1)
+    assert rows
+
+    print_k5_c_half_orbit_optimality_certificate_report(h_values=(1, 2), max_used=1, n=3)
+
+    captured = capsys.readouterr()
+    assert "c=1/2 orbit optimality" in captured.out
+    assert "transition containment" in captured.out
+    assert "value domination" in captured.out
+    assert "max violation" in captured.out
+
+
+def test_c_half_orbit_dual_certificate_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_c_half_orbit_dual_certificate_rows(h_values=(1, 2), max_used=1)
+    assert rows
+    assert all(row.certificate_type in {"transition-hull", "value-domination"} for row in rows)
+
+    print_k5_c_half_orbit_dual_certificate_report(h_values=(1, 2), max_used=1, n=2)
+
+    captured = capsys.readouterr()
+    assert "c=1/2 orbit dual certificate" in captured.out
+    assert "transition-hull certificates" in captured.out
+    assert "value-domination inequalities" in captured.out
+    assert "theorem-ready implication" in captured.out
+
+
+def test_c_half_invariant_inequality_closure_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_c_half_invariant_inequality_closure_rows(h_values=(2,), max_used=1)
+    assert rows
+
+    print_k5_c_half_invariant_inequality_closure_report(h_values=(2,), max_used=1, n=2)
+
+    captured = capsys.readouterr()
+    assert "c=1/2 invariant inequality closure" in captured.out
+    assert "closure summary" in captured.out
+    assert "active-action case splits" in captured.out
+    assert "theorem-ready closure table" in captured.out
+
+
+def test_c_half_invariant_cone_closure_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_c_half_invariant_cone_closure_report(h_values=(2,), max_used=1, n=2)
+
+    captured = capsys.readouterr()
+    assert "c=1/2 invariant cone closure" in captured.out
+    assert "known value-domination inequality families" in captured.out
+    assert "closure table" in captured.out
+    assert "failures by exact packet/action/class" in captured.out
+
+
+def test_c_half_augmented_cone_closure_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_c_half_augmented_cone_closure_rows(h_values=(2,), max_used=1, cegar_iterations=1)
+    assert rows
+
+    print_k5_c_half_augmented_cone_closure_report(
+        h_values=(2,),
+        max_used=1,
+        n=2,
+        cegar_iterations=1,
+    )
+
+    captured = capsys.readouterr()
+    assert "c=1/2 augmented cone closure" in captured.out
+    assert "orbit guard inequalities" in captured.out
+    assert "CEGAR" in captured.out
+    assert "remaining failures" in captured.out
+
+
+def test_c_half_augmented_cone_proof_export_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    export = k5_c_half_augmented_cone_proof_export(h_values=(2,), max_used=1, cegar_iterations=1)
+    assert export.rows
+
+    print_k5_c_half_augmented_cone_proof_export_report(
+        h_values=(2,),
+        max_used=1,
+        n=2,
+        cegar_iterations=1,
+    )
+
+    captured = capsys.readouterr()
+    assert "c=1/2 augmented cone proof export" in captured.out
+    assert "generator families" in captured.out
+    assert "closed-row expansions" in captured.out
+    assert "LaTeX-ready theorem statement" in captured.out
+
+
+def test_c_half_augmented_cone_audit_export_and_verify_runs(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path,
+) -> None:
+    certificate_path = tmp_path / "c_half_certificate.json"
+    result = k5_c_half_augmented_cone_audit_report(
+        h_values=(2,),
+        max_used=0,
+        export_certificate=str(certificate_path),
+        cegar_iterations=1,
+    )
+    assert certificate_path.exists()
+    assert result.pushed_rows >= result.closed_rows
+
+    print_k5_c_half_augmented_cone_audit_report(
+        h_values=(2,),
+        max_used=0,
+        export_certificate=str(certificate_path),
+        cegar_iterations=1,
+    )
+    print_k5_c_half_augmented_cone_certificate_verify_report(str(certificate_path))
+
+    captured = capsys.readouterr()
+    assert "k5 c=1/2 augmented cone audit" in captured.out
+    assert "finite representative basis" in captured.out
+    assert "rationalized cone export" in captured.out
+    assert "k5 c=1/2 augmented cone certificate verifier" in captured.out
+    assert "certificate path:" in captured.out
+
+
+def test_c_half_augmented_cone_small_basis_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    result = k5_c_half_augmented_cone_small_basis_report_data(h_values=(2,), max_used=0, cegar_iterations=1)
+    assert result.groups
+    assert result.basis_total >= result.basis_closed
+
+    print_k5_c_half_augmented_cone_small_basis_report(
+        h_values=(2,),
+        max_used=0,
+        n=2,
+        cegar_iterations=1,
+    )
+
+    captured = capsys.readouterr()
+    assert "c=1/2 augmented cone small human-readable basis" in captured.out
+    assert "CEGAR generator classification" in captured.out
+    assert "small-basis reproduction test" in captured.out
+
+
+def test_c_half_schur_guard_cone_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    result = k5_c_half_schur_guard_cone_result(h_values=(2,), max_used=0)
+    assert result.dominance_total >= result.dominance_closed
+
+    print_k5_c_half_schur_guard_cone_report(
+        h_values=(2,),
+        max_used=0,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "c=1/2 cone as Schur-convexity plus active guards" in captured.out
+    assert "Schur-convex / majorization inequalities" in captured.out
+    assert "c=1/2 dominance from Schur + active guards" in captured.out
+    assert "minimal additional exchange schemas" in captured.out
+
+
+def test_full_vs_orbit_delta_barrier_reproduces_flat_delta_table() -> None:
+    rows = k5_full_vs_orbit_delta_rows(h_max=1, max_used=0)
+    flat = next(row for row in rows if row.horizon == 1 and row.state == (0, 0, 0, 0, 0))
+
+    assert flat.delta == pytest.approx(0.3)
+    assert flat.best_full_c == Fraction(1, 5)
+
+
+def test_full_vs_orbit_delta_barrier_delta_is_nonnegative() -> None:
+    rows = k5_full_vs_orbit_delta_rows(h_max=2, max_used=1)
+
+    assert rows
+    assert all(row.delta >= -1e-12 for row in rows)
+
+
+def test_full_vs_orbit_delta_barrier_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_full_vs_orbit_delta_barrier_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "full-vs-orbit Delta" in captured.out
+    assert "barrier residual" in captured.out
+    assert "packet barrier" in captured.out
+    assert "flat bound" in captured.out
+
+
+def test_delta_supersolution_reproduces_observed_flat_delta() -> None:
+    rows = k5_full_vs_orbit_delta_rows(h_max=1, max_used=0)
+    flat = next(row for row in rows if row.state == (0, 0, 0, 0, 0))
+
+    assert flat.delta == pytest.approx(0.3)
+
+
+def test_delta_supersolution_packet_constants_dominate_observed_grid() -> None:
+    rows = k5_full_vs_orbit_delta_rows(h_max=2, max_used=1)
+    constants: dict[tuple[int, ...], float] = {}
+    for row in rows:
+        constants[row.packet_type] = max(constants.get(row.packet_type, 0.0), row.delta)
+
+    assert rows
+    assert all(row.delta <= constants[row.packet_type] + 1e-12 for row in rows)
+
+
+def test_delta_supersolution_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_full_vs_orbit_delta_supersolution_rows(h_max=1, max_used=0)
+    assert rows
+
+    print_k5_full_vs_orbit_delta_supersolution_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "Delta supersolution" in captured.out
+    assert "packet barrier" in captured.out
+    assert "Bellman residual" in captured.out
+    assert "fitted constants" in captured.out
+
+
+def test_reachable_delta_barrier_builds_union_dag() -> None:
+    rows = k5_full_vs_orbit_reachable_delta_rows(h_max=2)
+    reachabilities = {row.reachability for row in rows}
+
+    assert {"full", "orbit", "union"} <= reachabilities
+    assert all(row.delta >= -1e-12 for row in rows)
+
+
+def test_reachable_delta_barrier_supersolution_rows_run() -> None:
+    rows = k5_full_vs_orbit_reachable_delta_supersolution_rows(h_max=1)
+
+    assert rows
+    assert {row.barrier_name for row in rows} == {"constant_0.3", "reachable packet barrier"}
+
+
+def test_reachable_delta_barrier_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_full_vs_orbit_reachable_delta_barrier_report(h_max=1, n=2)
+
+    captured = capsys.readouterr()
+    assert "reachable full-vs-orbit Delta barrier" in captured.out
+    assert "reachable DAG sizes" in captured.out
+    assert "Bellman residual on reachable states" in captured.out
+    assert "off-policy diagnostic" in captured.out
+
+
+def test_time_packet_barrier_rows_dominate_flat_delta() -> None:
+    rows = k5_full_vs_orbit_time_packet_barrier_rows(h_max=1, max_used=0)
+    flat = next(row for row in rows if row.time == 1 and row.packet_type == (5,))
+
+    assert flat.observed_delta == pytest.approx(0.3)
+    assert flat.fitted_constant >= flat.flat_delta
+
+
+def test_time_packet_barrier_residuals_are_feasible_on_tiny_grid() -> None:
+    rows = k5_full_vs_orbit_time_packet_barrier_residual_rows(h_max=2, max_used=1)
+
+    assert rows
+    assert max(row.residual for row in rows) <= 1e-9
+
+
+def test_time_packet_barrier_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_full_vs_orbit_time_packet_barrier_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "full-vs-orbit time-packet barrier" in captured.out
+    assert "feasibility" in captured.out
+    assert "flat packet sequence" in captured.out
+    assert "boundedness / periodicity hints" in captured.out
+
+
+def test_packet_barrier_recurrence_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_full_vs_orbit_packet_barrier_recurrence_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "full-vs-orbit packet barrier recurrence" in captured.out
+    assert "compact P_t(packet) table" in captured.out
+    assert "requirement map argmax" in captured.out
+    assert "fixed-point packet barrier" in captured.out
+
+
+def test_time_packet_barrier_growth_rows_run() -> None:
+    summary = k5_full_vs_orbit_time_packet_barrier_growth_summary_rows(h_max=2, max_used=1)
+    packets = k5_full_vs_orbit_time_packet_barrier_growth_packet_rows(h_max=2, max_used=1)
+
+    assert len(summary) == 2
+    assert packets
+    assert all(len(row.values) == 2 for row in packets)
+
+
+def test_time_packet_barrier_growth_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_full_vs_orbit_time_packet_barrier_growth_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "full-vs-orbit time-packet barrier growth" in captured.out
+    assert "global growth summary" in captured.out
+    assert "simple fits" in captured.out
+    assert "growth evidence" in captured.out
+
+
+def test_packet_barrier_growth_inequality_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_full_vs_orbit_packet_barrier_growth_inequality_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "full-vs-orbit packet barrier growth inequality" in captured.out
+    assert "M_t increment diagnostics" in captured.out
+    assert "empirical upper envelopes" in captured.out
+    assert "candidate theorem" in captured.out
+
+
+def test_packet_barrier_increment_source_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_packet_barrier_increment_source_rows(h_max=1, max_used=0)
+    assert rows
+
+    print_k5_packet_barrier_increment_source_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "packet barrier increment source" in captured.out
+    assert "global increment witnesses" in captured.out
+    assert "mechanism groups" in captured.out
+    assert "candidate symbolic inequalities" in captured.out
+
+
+def test_packet_barrier_mechanism_source_bound_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_packet_barrier_mechanism_source_bound_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "packet barrier mechanism source bound" in captured.out
+    assert "clean mechanism table" in captured.out
+    assert "representative exact formulas" in captured.out
+    assert "harmonic envelope" in captured.out
+
+
+def test_variable_c_mechanism_domination_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_variable_c_mechanism_domination_rows(h_max=1, max_used=0)
+    assert rows
+
+    print_k5_variable_c_mechanism_domination_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "variable-c mechanism domination" in captured.out
+    assert "domination summary" in captured.out
+    assert "mechanism coverage" in captured.out
+    assert "failures" in captured.out
+
+
+def test_variable_c_harmonic_barrier_lp_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    results = k5_variable_c_harmonic_barrier_lp_results(h_max=1, max_used=0)
+    assert results
+
+    print_k5_variable_c_harmonic_barrier_lp_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "variable-c harmonic barrier LP" in captured.out
+    assert "refinement comparison" in captured.out
+    assert "requested special labels" in captured.out
+    assert "theorem candidate" in captured.out
+
+
+def test_variable_c_harmonic_barrier_compression_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_variable_c_harmonic_barrier_compression_rows(h_max=1, max_used=0)
+    assert rows
+
+    print_k5_variable_c_harmonic_barrier_compression_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "variable-c low-gap harmonic barrier compression" in captured.out
+    assert "simplest successful A(x)" in captured.out
+    assert "failed simple forms" in captured.out
+    assert "theorem candidate" in captured.out
+
+
+def test_variable_c_harmonic_barrier_simple_candidates_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_variable_c_harmonic_barrier_simple_candidate_rows(h_max=1, max_used=0)
+    assert rows
+
+    print_k5_variable_c_harmonic_barrier_simple_candidates_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "variable-c human-simple low-gap harmonic supersolutions" in captured.out
+    assert "simplest candidate that closes" in captured.out
+    assert "worst rows for failed candidates" in captured.out
+    assert "theorem candidate" in captured.out
+
+
+def test_low_gap_a0_c1_human_proof_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_a0_c1_human_proof_rows(h_max=1, max_used=0)
+    assert rows
+
+    print_k5_low_gap_a0_c1_human_proof_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap A=0 C=1 human-proof report" in captured.out
+    assert "mechanism summary" in captured.out
+    assert "rationalized formulas" in captured.out
+    assert "theorem candidate" in captured.out
+
+
+def test_low_gap_a0_c1_mechanism_lemma_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_a0_c1_mechanism_lemma_rows(h_max=1, max_used=0)
+    assert rows
+
+    print_k5_low_gap_a0_c1_mechanism_lemma_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap A=0 C=1 mechanism lemma report" in captured.out
+    assert "compact lemma table" in captured.out
+    assert "rational witnesses" in captured.out
+    assert "theorem-ready statement" in captured.out
+
+
+def test_low_gap_a0_c1_symbolic_mechanism_proofs_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_a0_c1_symbolic_mechanism_proof_rows(h_max=1, max_used=0)
+    assert rows
+
+    print_k5_low_gap_a0_c1_symbolic_mechanism_proofs_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap A=0 C=1 symbolic mechanism proofs" in captured.out
+    assert "LaTeX-ready lemma table" in captured.out
+    assert "generic inequalities needed" in captured.out
+    assert "theorem-ready proof skeleton" in captured.out
+
+
+def test_low_gap_boundary_and_variance_lemmas_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_boundary_and_variance_lemma_rows(h_max=1, max_used=0)
+    assert rows
+
+    print_k5_low_gap_boundary_and_variance_lemmas_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap boundary and variance lemmas" in captured.out
+    assert "definitions and finite differences" in captured.out
+    assert "LaTeX-ready lemmas" in captured.out
+    assert "remaining proof work" in captured.out
+
+
+def test_orbit_finite_difference_recurrence_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_orbit_finite_difference_recurrence_rows(h_max=1)
+    assert rows
+
+    print_k5_orbit_finite_difference_recurrence_report(h_max=1, n=4)
+
+    captured = capsys.readouterr()
+    assert "k5 orbit finite-difference recurrence report" in captured.out
+    assert "quantity summary and candidate constants" in captured.out
+    assert "exact Bellman expansions" in captured.out
+    assert "candidate inductive barriers" in captured.out
+
+
+def test_low_gap_exact_residual_recurrence_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows, vector_alpha, feasible, _message = k5_low_gap_exact_residual_recurrence_rows(h_max=1, max_used=0)
+    assert rows
+    assert vector_alpha
+    assert isinstance(feasible, bool)
+
+    print_k5_low_gap_exact_residual_recurrence_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap exact residual recurrence report" in captured.out
+    assert "scalar alpha_m/t barriers" in captured.out
+    assert "exact residual recurrence diagnostics" in captured.out
+    assert "vector barrier fit" in captured.out
+
+
+def test_low_gap_scalar_residual_envelope_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_scalar_residual_envelope_rows(h_max=1, max_used=0)
+    assert rows
+
+    print_k5_low_gap_scalar_residual_envelope_proof_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap scalar residual envelope proof report" in captured.out
+    assert "a_m(t)=t sup R_m(t) by mechanism" in captured.out
+    assert "smallest sampled refinement" in captured.out
+    assert "theorem candidate" in captured.out
+
+
+def test_low_gap_scalar_envelope_recurrence_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_scalar_envelope_recurrence_proof_rows(h_max=1, max_used=0)
+    assert rows
+
+    print_k5_low_gap_scalar_envelope_recurrence_proof_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap scalar envelope recurrence proof report" in captured.out
+    assert "scalar recurrence lemmas" in captured.out
+    assert "induction" in captured.out
+    assert "LaTeX-ready theorem template" in captured.out
+
+
+def test_low_gap_scalar_envelope_exact_certificate_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_scalar_envelope_exact_proof_certificate_rows(h_max=1, max_used=0)
+    assert rows
+
+    print_k5_low_gap_scalar_envelope_exact_proof_certificate_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap scalar envelope exact proof certificate" in captured.out
+    assert "exact scalar envelope certificates" in captured.out
+    assert "maximising representatives" in captured.out
+    assert "proof gap" in captured.out
+
+
+def test_low_gap_scalar_envelope_lyapunov_certificate_printer_runs(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path,
+) -> None:
+    certificate = k5_low_gap_scalar_envelope_lyapunov_certificate_data(h_max=1, max_used=0)
+    assert certificate["kind"] == "k5-low-gap-scalar-envelope-lyapunov-certificate"
+
+    certificate_path = tmp_path / "lyapunov_certificate.json"
+    print_k5_low_gap_scalar_envelope_lyapunov_certificate_report(
+        h_max=1,
+        max_used=0,
+        certificate_path=str(certificate_path),
+        n=2,
+    )
+    print_k5_low_gap_scalar_envelope_lyapunov_certificate_verify_report(str(certificate_path))
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap scalar envelope Lyapunov certificate" in captured.out
+    assert "independent verifier command" in captured.out
+    assert "k5 low-gap scalar envelope Lyapunov certificate verifier" in captured.out
+    assert certificate_path.exists()
+
+
+def test_low_gap_unified_residual_automaton_certificate_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    data = k5_low_gap_unified_residual_automaton_certificate_data(h_max=1, max_used=0)
+    assert data["kind"] == "k5-low-gap-unified-residual-automaton-certificate"
+
+    print_k5_low_gap_unified_residual_automaton_certificate_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap unified residual automaton certificate" in captured.out
+    assert "unified envelope" in captured.out
+    assert "block decomposition" in captured.out
+    assert "theorem-ready certificate" in captured.out
+
+
+def test_low_gap_lyapunov_certificate_debug_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_low_gap_lyapunov_certificate_debug_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap Lyapunov certificate debug report" in captured.out
+    assert "failure classification" in captured.out
+    assert "top 2 failed inequalities" in captured.out
+    assert "corrected certificate status" in captured.out
+
+
+def test_low_gap_corrected_residual_taxonomy_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    data = k5_low_gap_corrected_residual_taxonomy_data(h_max=1, max_used=0)
+    assert data["kind"] == "k5-low-gap-corrected-residual-taxonomy"
+
+    print_k5_low_gap_corrected_residual_taxonomy_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap corrected residual taxonomy report" in captured.out
+    assert "corrected mechanism table" in captured.out
+    assert "refined labels whose old alpha was too small" in captured.out
+    assert "scalar envelope and Lyapunov verifier rerun" in captured.out
+
+
+def test_low_gap_corrected_tail_lyapunov_certificate_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    data = k5_low_gap_corrected_tail_lyapunov_certificate_data(h_max=1, max_used=0)
+    assert data["kind"] == "k5-low-gap-corrected-tail-lyapunov-certificate"
+
+    print_k5_low_gap_corrected_tail_lyapunov_certificate_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap corrected tail Lyapunov certificate" in captured.out
+    assert "cap attempts" in captured.out
+    assert "selected certificate" in captured.out
+    assert "theorem statement" in captured.out
+
+
+def test_low_gap_richer_tail_envelope_certificate_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    data = k5_low_gap_richer_tail_envelope_certificate_data(h_max=1, max_used=0)
+    assert data["kind"] == "k5-low-gap-richer-tail-envelope-certificate"
+
+    print_k5_low_gap_richer_tail_envelope_certificate_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap richer tail envelope certificate" in captured.out
+    assert "envelope attempts" in captured.out
+    assert "selected certificate" in captured.out
+    assert "signed envelope" in captured.out
+
+
+def test_low_gap_signed_cancellation_identity_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_signed_cancellation_identity_rows(h_max=2, max_used=0, n=2)
+    assert rows
+
+    print_k5_low_gap_signed_cancellation_identity_report(h_max=2, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap signed cancellation identity report" in captured.out
+    assert "signed Bellman residual identities" in captured.out
+    assert "potential correction candidates" in captured.out or "no simple positive-coefficient feature correction" in captured.out
+    assert "proposed next potential correction" in captured.out
+
+
+def test_low_gap_correction_potential_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_correction_potential_rows(h_max=1, max_used=0)
+    assert rows
+
+    print_k5_low_gap_correction_potential_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap correction potential report" in captured.out
+    assert "candidate comparison" in captured.out
+    assert "best simple correction potential" in captured.out
+    assert "LaTeX-ready candidate lemma" in captured.out
+
+
+def test_low_gap_correction_pattern_proof_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_correction_pattern_proof_rows(h_max=1, max_used=0)
+    assert rows
+
+    print_k5_low_gap_correction_pattern_proof_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap correction-potential finite pattern proof report" in captured.out
+    assert "compact pattern table" in captured.out
+    assert "verification summary" in captured.out
+    assert "LaTeX-ready lemmas" in captured.out
+
+
+def test_low_gap_packet_convexity_schema_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    schema_rows, appendix = k5_low_gap_packet_convexity_schema_rows(h_max=1, max_used=0)
+    assert schema_rows
+    assert appendix
+
+    print_k5_low_gap_packet_convexity_schema_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap packet-convexity schema compression report" in captured.out
+    assert "reusable packet-convexity schemas" in captured.out
+    assert "theorem-proof skeleton" in captured.out
+    assert "appendix mapping" in captured.out
+
+
+def test_low_gap_curvature_analytic_proof_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_low_gap_curvature_analytic_proof_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap curvature analytic proof reduction report" in captured.out
+    assert "curvature definitions" in captured.out
+    assert "Bellman recurrence attempt" in captured.out
+    assert "LaTeX-ready proof skeleton" in captured.out
+
+
+def test_low_gap_pattern_curvature_recurrence_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_pattern_curvature_recurrence_rows(h_max=1, max_used=0)
+    assert rows
+
+    print_k5_low_gap_pattern_curvature_recurrence_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap pattern-curvature recurrence report" in captured.out
+    assert "refined variable list" in captured.out
+    assert "recurrence matrix/source terms" in captured.out
+    assert "LaTeX-ready induction lemma template" in captured.out
+
+
+def test_low_gap_bellman_image_recurrence_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_bellman_image_recurrence_rows(h_max=1, max_used=0, focus="F", max_new_generators=3)
+    assert rows
+    assert all(row.image_measure or row.image_constant for row in rows)
+
+    print_k5_low_gap_bellman_image_recurrence_report(h_max=1, max_used=0, focus="F", max_new_generators=3, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap signed-packet Bellman image recurrence report" in captured.out
+    assert "Bellman images" in captured.out
+    assert "recurrence edges" in captured.out
+    assert "theorem-ready recurrence template" in captured.out
+
+
+def test_multi_step_bellman_pattern_miner_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_multi_step_bellman_pattern_miner_report(
+        h_max=1,
+        max_used=0,
+        max_new_generators=2,
+        finite_steps=2,
+        large_gap_h_values=(1,),
+        large_gap_max_used=2,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 multi-step Bellman pattern miner" in captured.out
+    assert "low-gap residual SCC taxonomy" in captured.out
+    assert "multi-step closure tests" in captured.out
+    assert "large-gap influence graph coverage" in captured.out
+    assert "c=1/2 orbit cone status" in captured.out
+
+
+def test_low_gap_flat_split_tail_proof_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    data = k5_low_gap_flat_split_tail_proof_data(h_max=1, max_used=0, max_new_generators=3, tail_time=2)
+    assert data.rows
+    assert data.open_rows or data.closed_rows
+
+    print_k5_low_gap_flat_split_tail_proof_report(h_max=1, max_used=0, max_new_generators=3, tail_time=2, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap flat-split tail proof report" in captured.out
+    assert "unclosed generator" in captured.out
+    assert "recurrence graph structure" in captured.out
+    assert "c_i/t barrier check" in captured.out
+    assert "LaTeX-ready flat-split lemma status" in captured.out
+
+
+def test_low_gap_flat_split_tail_telescoping_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    chains = k5_low_gap_flat_split_tail_telescoping_chains(h_max=1, max_used=0, max_new_generators=3)
+    assert isinstance(chains, tuple)
+
+    print_k5_low_gap_flat_split_tail_telescoping_report(h_max=1, max_used=0, max_new_generators=3, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap flat-split affine-tail telescoping report" in captured.out
+    assert "exact source partial sums" in captured.out
+    assert "cancellation against F roots" in captured.out
+    assert "coboundary correction" in captured.out
+    assert "LaTeX-ready flat-split tail lemma candidate" in captured.out
+
+
+def test_low_gap_flat_split_long_tail_limit_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_flat_split_long_tail_rows(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        start_variable="X_1",
+        steps=3,
+    )
+    assert len(rows) == 3
+
+    print_k5_low_gap_flat_split_long_tail_limit_report(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        start_variable="X_1",
+        steps=3,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap flat-split long-tail limit report" in captured.out
+    assert "affine source sums" in captured.out
+    assert "X_80 / X_81 endpoint" in captured.out
+    assert "limiting signed measure proxy" in captured.out
+    assert "LaTeX-ready tail lemma candidate" in captured.out
+
+
+def test_low_gap_flat_split_tail_operator_certificate_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    certificate = k5_low_gap_flat_split_tail_operator_certificate(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        start_variable="X_1",
+        steps=3,
+        max_power=2,
+    )
+    assert certificate.packets
+    assert certificate.mass_preserved
+
+    print_k5_low_gap_flat_split_tail_operator_certificate_report(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        start_variable="X_1",
+        steps=3,
+        max_power=2,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap flat-split tail operator certificate report" in captured.out
+    assert "exact operator B and source" in captured.out
+    assert "fixed-point equations" in captured.out
+    assert "contraction certificate" in captured.out
+    assert "theorem-ready tail lemma" in captured.out
+
+
+def test_low_gap_flat_split_tail_contraction_lemma_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    data = k5_low_gap_flat_split_tail_contraction_lemma_data(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        start_variable="X_1",
+        finite_steps=3,
+        max_power=2,
+    )
+    assert data.source_bound_c >= 0
+    assert data.poisson_potential
+
+    print_k5_low_gap_flat_split_tail_contraction_lemma_report(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        start_variable="X_1",
+        finite_steps=3,
+        max_power=2,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap flat-split tail contraction lemma report" in captured.out
+    assert "source functional" in captured.out
+    assert "exact Poisson/coboundary tail" in captured.out
+    assert "LaTeX-ready lemma" in captured.out
+
+
+def test_low_gap_flat_split_schema_proof_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_flat_split_schema_proof_rows(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        finite_steps=3,
+        max_power=2,
+    )
+    assert rows
+
+    print_k5_low_gap_flat_split_schema_proof_report(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        finite_steps=3,
+        max_power=2,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap flat-split convexity schema proof report" in captured.out
+    assert "F-root classification table" in captured.out
+    assert "finite-chain lemmas" in captured.out
+    assert "long-tail Poisson lemma" in captured.out
+    assert "LaTeX-ready theorem" in captured.out
+
+
+def test_low_gap_adjacent_merge_schema_proof_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_adjacent_merge_schema_proof_rows(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+    )
+    assert isinstance(rows, tuple)
+
+    print_k5_low_gap_adjacent_merge_schema_proof_report(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap adjacent-merge convexity schema proof report" in captured.out
+    assert "M-root classification table" in captured.out
+    assert "proof summary" in captured.out
+    assert "LaTeX-ready theorem" in captured.out
+
+
+def test_low_gap_packet_count_schema_proof_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_packet_count_schema_proof_rows(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+    )
+    assert isinstance(rows, tuple)
+
+    print_k5_low_gap_packet_count_schema_proof_report(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap packet-count correction schema proof report" in captured.out
+    assert "Q-root classification table" in captured.out
+    assert "proof summary" in captured.out
+    assert "LaTeX-ready theorem" in captured.out
+
+
+def test_low_gap_finite_residual_schema_proof_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_finite_residual_schema_proof_rows(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+    )
+    assert isinstance(rows, tuple)
+
+    print_k5_low_gap_finite_residual_schema_proof_report(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap finite residual pattern schema proof report" in captured.out
+    assert "E-root classification table" in captured.out
+    assert "proof summary" in captured.out
+    assert "LaTeX-ready theorem" in captured.out
+
+
+def test_low_gap_boundary_schema_proof_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_boundary_schema_proof_rows(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+    )
+    assert isinstance(rows, tuple)
+
+    print_k5_low_gap_boundary_schema_proof_report(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap one-one-three boundary convexity schema proof report" in captured.out
+    assert "B-root classification table" in captured.out
+    assert "proof summary" in captured.out
+    assert "LaTeX-ready theorem" in captured.out
+
+
+def test_low_gap_higher_refinement_schema_proof_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_higher_refinement_schema_proof_rows(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+    )
+    assert isinstance(rows, tuple)
+
+    print_k5_low_gap_higher_refinement_schema_proof_report(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap higher-refinement averaging schema proof report" in captured.out
+    assert "H-root classification table" in captured.out
+    assert "failures" in captured.out
+    assert "proof summary" in captured.out
+    assert "LaTeX-ready theorem" in captured.out
+
+
+def test_low_gap_curvature_gap_action_grouping_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_curvature_gap_action_rows(h_max=1, max_used=0)
+    assert isinstance(rows, tuple)
+
+    print_k5_low_gap_curvature_gap_action_grouping_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap curvature-gap action grouping report" in captured.out
+    assert "competing action types" in captured.out
+    assert "curvature-gap inequalities by competing action" in captured.out
+    assert "theorem-reader note" in captured.out
+
+
+def test_low_gap_ordered_face_geometry_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_ordered_face_geometry_rows(h_max=1, max_used=0)
+    assert isinstance(rows, tuple)
+
+    print_k5_low_gap_ordered_face_geometry_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap ordered-face geometry report" in captured.out
+    assert "ordered chamber convention" in captured.out
+    assert "packet partitions as ordered-chamber faces" in captured.out
+    assert "schema names versus face-transition types" in captured.out
+    assert "geometric interpretation" in captured.out
+
+
+def test_low_gap_discrete_maximum_principle_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_discrete_maximum_principle_components(
+        h_max=1,
+        max_used=0,
+        max_new_generators=2,
+    )
+    assert isinstance(rows, tuple)
+
+    print_k5_low_gap_discrete_maximum_principle_report(
+        h_max=1,
+        max_used=0,
+        max_new_generators=2,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap discrete maximum principle report" in captured.out
+    assert "strongly connected components" in captured.out
+    assert "boundary" in captured.out
+    assert "discrete maximum principle lemma" in captured.out
+    assert "certificate status" in captured.out
+
+
+def test_low_gap_cyclic_component_closure_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_cyclic_component_closure_data(
+        h_max=1,
+        max_used=0,
+        max_new_generators=2,
+        finite_steps=2,
+    )
+    assert isinstance(rows, tuple)
+
+    print_k5_low_gap_cyclic_component_closure_report(
+        h_max=1,
+        max_used=0,
+        max_new_generators=2,
+        finite_steps=2,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap cyclic component closure report" in captured.out
+    assert "cyclic component node lists" in captured.out
+    assert "internal recurrence rows" in captured.out
+    assert "flat-split X-tail" in captured.out
+    assert "theorem-ready statement" in captured.out
+
+
+def test_low_gap_boundary_compression_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_boundary_compression_rows(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+    )
+    assert isinstance(rows, tuple)
+
+    print_k5_low_gap_boundary_compression_report(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap boundary compression report" in captured.out
+    assert "essential boundary rows" in captured.out
+    assert "cone-dominated boundary rows removed" in captured.out
+    assert "old schema rows implied" in captured.out
+    assert "theorem-ready proof skeleton" in captured.out
+
+
+def test_low_gap_boundary_atom_taxonomy_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_low_gap_boundary_atom_rows(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+    )
+    assert isinstance(rows, tuple)
+
+    print_k5_low_gap_boundary_atom_taxonomy_report(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap boundary atom taxonomy report" in captured.out
+    assert "atom taxonomy table" in captured.out
+    assert "representative formulas" in captured.out
+    assert "proposed human-readable lemmas" in captured.out
+    assert "rows not explained by simple atoms" in captured.out
+
+
+def test_low_gap_boundary_atom_symbolic_lemmas_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_low_gap_boundary_atom_symbolic_lemmas_report(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap boundary atom symbolic lemmas report" in captured.out
+    assert "six theorem-ready atom lemmas" in captured.out
+    assert "exact row specializations" in captured.out
+    assert "primitive assumptions" in captured.out
+    assert "remaining gaps" in captured.out
+    assert "paper-ready conclusion" in captured.out
+
+
+def test_low_gap_packet_count_gap_closure_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_low_gap_packet_count_gap_closure_report(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap packet-count symbolic gap closure report" in captured.out
+    assert "exact decompositions" in captured.out
+    assert "generic symbolic formula" in captured.out
+    assert "Packet-count-with-remainder atom" in captured.out
+    assert "theorem-ready statements" in captured.out
+    assert "remaining appendix-only rows" in captured.out
+
+
+def test_low_gap_refinement_packet_count_fan_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_low_gap_refinement_packet_count_fan_report(
+        h_max=1,
+        max_used=0,
+        seed_generators=3,
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap refinement packet-count fan report" in captured.out
+    assert "common structure table" in captured.out
+    assert "ordered-gap face formulas" in captured.out
+    assert "shared fan decomposition test" in captured.out
+    assert "proposed seventh atom" in captured.out
+    assert "appendix-only status" in captured.out
+
+
+def test_low_gap_maximum_principle_proof_outline_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_low_gap_maximum_principle_proof_outline_report()
+
+    captured = capsys.readouterr()
+    assert "k5 low-gap maximum-principle proof outline" in captured.out
+    assert "quotient balanced actions" in captured.out
+    assert "define curvature gaps" in captured.out
+    assert "ordered-chamber faces" in captured.out
+    assert "packet-face recurrence graph" in captured.out
+    assert "unique cyclic component" in captured.out
+    assert "Poisson/coboundary" in captured.out
+    assert "LaTeX-ready theorem statement" in captured.out
+
+
+def test_low_gap_maximum_principle_replacement_section_printer_runs(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    print_k5_low_gap_maximum_principle_replacement_section_report()
+
+    captured = capsys.readouterr()
+    assert r"\subsection{Low-gap packet-face maximum principle}" in captured.out
+    assert "Ordered gaps and packet faces" in captured.out
+    assert "Curvature gaps" in captured.out
+    assert "low-gap packet-face maximum principle" in captured.out
+    assert "Packet-curvature atom lemmas" in captured.out
+    assert "refinement packet-count fan" in captured.out
+    assert "Appendix-only finite fan rows" in captured.out
+    assert "flat-split Poisson tail" in captured.out
+    assert "Conclusion of the low-gap supersolution" in captured.out
+
+
+def test_complement_balancing_symmetry_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_complement_balancing_symmetry_rows(h_max=1, max_used=0)
+    assert rows
+    assert all(row.same_quotient_class for row in rows)
+
+    print_k5_complement_balancing_symmetry_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 complement/balancing symmetry report" in captured.out
+    assert "action complement quotient table" in captured.out
+    assert "residual symmetry audit" in captured.out
+    assert "low-gap schema reduction" in captured.out
+    assert "balanced complement symmetry" in captured.out
+
+
+def test_variable_c_harmonic_barrier_proof_export_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    exports = k5_variable_c_harmonic_barrier_proof_exports(h_max=1, max_used=0)
+    assert exports
+
+    print_k5_variable_c_harmonic_barrier_proof_export_report(h_max=1, max_used=0, n=2)
+
+    captured = capsys.readouterr()
+    assert "variable-c harmonic barrier proof export" in captured.out
+    assert "theorem constants" in captured.out
+    assert "LaTeX-ready barrier constants" in captured.out
+    assert "sampled inequalities" in captured.out
+    assert "LaTeX-ready theorem statement" in captured.out
+
+
+def test_direct_route_finite_quotient_validation_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    result = k5_direct_route_finite_quotient_validation_result(max_used=0, h_max=1, max_refinement_rounds=1)
+    assert result.concrete_state_count >= 1
+
+    print_k5_direct_route_finite_quotient_validation_report(max_used=0, h_max=1, max_refinement_rounds=1, n=2)
+
+    captured = capsys.readouterr()
+    assert "direct route finite quotient validation" in captured.out
+    assert "quotient refinement" in captured.out
+    assert "abstract-label harmonic barrier LP" in captured.out
+    assert "c=1/2 augmented cone closure cross-check" in captured.out
+    assert "verdict" in captured.out
+
+
+def test_direct_route_large_gap_domination_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_direct_route_large_gap_domination_rows(h_max=1, max_used=1)
+    assert rows
+
+    print_k5_direct_route_large_gap_domination_report(h_max=1, max_used=1, n=2)
+
+    captured = capsys.readouterr()
+    assert "direct route large-gap domination" in captured.out
+    assert "monotonicity summary" in captured.out
+    assert "threshold tests" in captured.out
+    assert "requested quotient-conflict families" in captured.out
+    assert "theorem candidate" in captured.out
+
+
+def test_direct_route_large_gap_influence_decay_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_direct_route_large_gap_influence_decay_rows(h_max=1, max_used=1)
+    assert rows
+
+    print_k5_direct_route_large_gap_influence_decay_report(h_max=1, max_used=1, n=2)
+
+    captured = capsys.readouterr()
+    assert "direct route large-gap influence decay" in captured.out
+    assert "influence by gap value" in captured.out
+    assert "envelope fits" in captured.out
+    assert "boundary versus true large-gap effects" in captured.out
+    assert "candidate tail lemma" in captured.out
+
+
+def test_direct_route_large_gap_hitting_bound_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_direct_route_large_gap_hitting_bound_rows(h_max=1, max_used=1)
+    assert isinstance(rows, tuple)
+
+    print_k5_direct_route_large_gap_hitting_bound_report(h_max=1, max_used=1, n=2)
+
+    captured = capsys.readouterr()
+    assert "direct route large-gap hitting bound" in captured.out
+    assert "influence versus hitting probability" in captured.out
+    assert "family crossing probabilities" in captured.out
+    assert "simple crossing envelopes" in captured.out
+    assert "theorem candidate" in captured.out
+
+
+def test_direct_route_large_gap_uniform_influence_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_direct_route_large_gap_uniform_influence_rows(h_max=1, max_used=2)
+    assert isinstance(rows, tuple)
+
+    print_k5_direct_route_large_gap_uniform_influence_report(h_max=1, max_used=2, n=2)
+
+    captured = capsys.readouterr()
+    assert "direct route large-gap uniform influence" in captured.out
+    assert "uniform square-scaled bound" in captured.out
+    assert "by horizon" in captured.out
+    assert "by gap value" in captured.out
+    assert "verdict" in captured.out
+
+
+def test_large_gap_one_leader_symbolic_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_large_gap_one_leader_symbolic_rows(h_max=1, max_a=2)
+    assert rows
+
+    print_k5_large_gap_one_leader_symbolic_report(h_max=1, max_a=2, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 large-gap one-leader symbolic" in captured.out
+    assert "I_h(a) table" in captured.out
+    assert "active actions realizing the differences" in captured.out
+    assert "recurrence diagnostics" in captured.out
+    assert "theorem candidate" in captured.out
+
+
+def test_one_leader_influence_recursive_certificate_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_one_leader_influence_recursive_certificate_rows(h_max=1, max_a=2)
+    assert rows
+
+    print_k5_one_leader_influence_recursive_certificate_report(h_max=1, max_a=2, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 one-leader influence recursive certificate" in captured.out
+    assert "active regime summary" in captured.out
+    assert "exact Bellman expressions" in captured.out
+    assert "worst constants" in captured.out
+    assert "theorem-ready lemma" in captured.out
+
+
+def test_large_gap_influence_cone_certificate_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows, fitted_b, feasible, _message = k5_large_gap_influence_cone_certificate_rows(h_max=1, max_used=2)
+    assert isinstance(rows, tuple)
+    assert fitted_b
+    assert isinstance(feasible, bool)
+
+    print_k5_large_gap_influence_cone_certificate_report(h_max=1, max_used=2, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 large-gap influence cone certificate" in captured.out
+    assert "fitted vector barrier constants" in captured.out
+    assert "active regimes" in captured.out
+    assert "recurrence inequalities" in captured.out
+    assert "target theorem" in captured.out
+
+
+def test_large_gap_influence_cone_source_certificate_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows, fitted_b, feasible, _message = k5_large_gap_influence_cone_source_certificate_rows(h_max=1, max_used=2)
+    assert isinstance(rows, tuple)
+    assert fitted_b
+    assert isinstance(feasible, bool)
+
+    print_k5_large_gap_influence_cone_source_certificate_report(h_max=1, max_used=2, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 large-gap influence cone source certificate" in captured.out
+    assert "source-aware vector barrier constants" in captured.out
+    assert "worst active row" in captured.out
+    assert "B_F=1 safe certificate" in captured.out
+    assert "theorem-ready inequalities" in captured.out
+
+
+def test_large_gap_influence_cone_proof_export_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows, constants, used_default = k5_large_gap_influence_cone_proof_export_rows(h_max=1, max_used=2)
+    assert isinstance(rows, tuple)
+    assert constants
+    assert isinstance(used_default, bool)
+
+    print_k5_large_gap_influence_cone_proof_export_report(h_max=1, max_used=2, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 large-gap influence cone proof export" in captured.out
+    assert "rational B_F constants" in captured.out
+    assert "LaTeX-ready certificate table" in captured.out
+    assert "verification" in captured.out
+
+
+def test_large_gap_one_dimensional_barrier_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_large_gap_one_dimensional_barrier_rows(h_max=1, max_used=2)
+    assert isinstance(rows, tuple)
+
+    print_k5_large_gap_one_dimensional_barrier_report(h_max=1, max_used=2, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 large-gap one-dimensional barrier report" in captured.out
+    assert "family-level summary" in captured.out
+    assert "one-dimensional regime table" in captured.out
+    assert "theorem candidate" in captured.out
+
+
+def test_large_gap_one_dimensional_failure_analysis_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows = k5_large_gap_one_dimensional_failure_analysis_rows(h_max=1, max_used=2)
+    assert isinstance(rows, tuple)
+
+    print_k5_large_gap_one_dimensional_failure_analysis_report(h_max=1, max_used=2, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 large-gap one-dimensional barrier failure analysis" in captured.out
+    assert "failure groups by state family" in captured.out
+    assert "extension tests" in captured.out
+    assert "smallest human-readable extension" in captured.out
+
+
+def test_large_gap_multi_gap_potential_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    rows, fitted_b, feasible, _message = k5_large_gap_multi_gap_potential_rows(h_max=1, max_used=2)
+    assert isinstance(rows, tuple)
+    assert len(fitted_b) == 4
+    assert isinstance(feasible, bool)
+
+    print_k5_large_gap_multi_gap_potential_report(h_max=1, max_used=2, n=2)
+
+    captured = capsys.readouterr()
+    assert "k5 large-gap multi-gap potential report" in captured.out
+    assert "Psi=sum_i B/(g_i+1)^2" in captured.out
+    assert "fitted gap-position constants" in captured.out
+    assert "theorem candidate" in captured.out
+
+
+def test_large_gap_barrier_audit_export_and_verify_runs(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path,
+) -> None:
+    certificate_path = tmp_path / "large_gap_certificate.json"
+    result = k5_large_gap_barrier_audit_report(
+        h_values=(1,),
+        max_used=2,
+        export_certificate=str(certificate_path),
+    )
+    assert certificate_path.exists()
+    assert result.target_inequalities >= result.closed_rows
+
+    print_k5_large_gap_barrier_audit_report(
+        h_values=(1,),
+        max_used=2,
+        export_certificate=str(certificate_path),
+        n=2,
+    )
+    print_k5_large_gap_barrier_certificate_verify_report(str(certificate_path))
+
+    captured = capsys.readouterr()
+    assert "k5 large-gap barrier audit" in captured.out
+    assert "large-gap region" in captured.out
+    assert "barrier/potential" in captured.out
+    assert "exact rational verification" in captured.out
+    assert "k5 large-gap barrier certificate verifier" in captured.out
+
+
+def test_large_gap_barrier_streaming_chunks_and_merge_runs(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path,
+) -> None:
+    certificate_dir = tmp_path / "chunks"
+    manifest_path = tmp_path / "manifest.json"
+    direct_chunk_path = tmp_path / "direct_h1_F1.json"
+
+    print_k5_large_gap_barrier_audit_report(
+        h_values=(1,),
+        max_used=2,
+        export_certificate=str(manifest_path),
+        certificate_dir=str(certificate_dir),
+        streaming=True,
+        families=("F1",),
+        n=2,
+    )
+    print_k5_large_gap_barrier_merge_verify_report(
+        manifest_path=str(manifest_path),
+    )
+    print_k5_large_gap_barrier_audit_report(
+        h_values=(1,),
+        max_used=2,
+        export_certificate=str(direct_chunk_path),
+        families=("F1",),
+        row_mode="true-large-gap",
+        n=1,
+    )
+    print_k5_large_gap_barrier_certificate_verify_report(str(direct_chunk_path))
+    print_k5_large_gap_barrier_audit_report(
+        h_values=(1,),
+        max_used=2,
+        row_mode="coverage",
+        n=1,
+    )
+    print_k5_large_gap_barrier_audit_report(
+        h_values=(1,),
+        max_used=2,
+        families=("F1",),
+        row_mode="true-large-gap",
+        dry_run=True,
+        n=1,
+    )
+
+    captured = capsys.readouterr()
+    assert "k5 large-gap barrier audit (streaming)" in captured.out
+    assert "chunk summary" in captured.out
+    assert "merge verifier" in captured.out
+    assert "k5 large-gap barrier merge verifier" in captured.out
+    assert "single chunk direct export" in captured.out
+    assert "row_mode: coverage" in captured.out
+    assert "dry_run: True" in captured.out
+    assert "No target inequalities were materialized" in captured.out
+    assert manifest_path.exists()
+    assert direct_chunk_path.exists()
+    assert any(certificate_dir.iterdir())
+
+
 def test_k5_scalar_potential_exchangeability_rows_run() -> None:
     rows = k5_scalar_potential_exchangeability_rows(
         max_used=1,
@@ -2202,6 +4194,1319 @@ def test_k5_worst_family_scaling_printer_runs(capsys: pytest.CaptureFixture[str]
     assert "k=5 worst-family scaling report" in captured.out
     assert "Candidate limiting worst point" in captured.out
     assert "Active-set stability" in captured.out
+
+
+def test_k5_packet122_asymptotic_state_generator() -> None:
+    state = _k5_packet122_state(100, 1.1, 1.2)
+
+    assert state == (23, 12, 12, 0, 0)
+    assert packet_type(state) == (1, 2, 2)
+
+
+def test_k5_packet122_asymptotic_rows_run() -> None:
+    rows = k5_packet122_asymptotic_equation_rows(
+        h_values=(10,),
+        s1_values=(1.0,),
+        s2_values=(1.0,),
+    )
+
+    assert rows
+    row = rows[0]
+    assert abs(row.predicted_weights[0] + 2 * row.predicted_weights[1] + 2 * row.predicted_weights[2] - 1.0) < 1e-9
+    assert row.lp_weights
+    assert row.active_count_vectors
+
+
+def test_k5_packet122_asymptotic_prediction_close_on_sample() -> None:
+    rows = k5_packet122_asymptotic_equation_rows(
+        h_values=(12,),
+        s1_values=(1.0,),
+        s2_values=(1.0,),
+    )
+
+    assert rows
+    row = rows[0]
+    assert abs(row.predicted_alpha - row.lp_alpha) < 1e-3
+    assert max(abs(left - right) for left, right in zip(row.predicted_weights, row.lp_weights, strict=True)) < 1e-3
+
+
+def test_k5_packet122_asymptotic_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_packet122_asymptotic_equations_report(
+        h_values=(10,),
+        s1_values=(1.0,),
+        s2_values=(1.0,),
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "packet_122 asymptotic equations" in captured.out
+    assert "two-equation predicted weights" in captured.out
+    assert "Prediction error" in captured.out
+
+
+def test_k5_packet122_q_asymptotic_rows_formula_matches_lp_on_sample() -> None:
+    rows = k5_packet122_q_asymptotic_rows(
+        h_values=(10,),
+        s1_values=(1.0,),
+        s2_values=(1.0,),
+    )
+
+    assert rows
+    row = rows[0]
+    formula_alpha = (row.q_top + 2.0 * row.q_mid - 1.0) / 3.0
+    assert abs(formula_alpha - row.lp_alpha) < 1e-9
+
+
+def test_k5_packet122_q_asymptotic_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_packet122_q_asymptotic_report(
+        h_values=(10,),
+        s1_values=(1.0,),
+        s2_values=(1.0,),
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "packet_122 q asymptotic report" in captured.out
+    assert "Formula alpha versus LP alpha" in captured.out
+    assert "Proof-ready table" in captured.out
+
+
+def test_k5_q_convention_audit_parser_runs() -> None:
+    cases = _parse_k5_q_audit_states("10:6,3,3,0,0")
+
+    assert len(cases) == 1
+    assert cases[0].horizon == 10
+    assert cases[0].state == (6, 3, 3, 0, 0)
+
+
+def test_rank_chase_formula_self_consistent() -> None:
+    state = (6, 3, 3, 0, 0)
+    horizon = 10
+
+    assert abs(
+        _rank_chase_future_uncentered_value(state, horizon)
+        - (_rank_chase_future_centered_value(state, horizon) + 0.5 * horizon)
+    ) < 1e-12
+
+
+def test_k5_q_convention_audit_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_q_convention_audit(
+        cases=_parse_k5_q_audit_states("10:6,3,3,0,0"),
+    )
+
+    captured = capsys.readouterr()
+    assert "k=5 q convention audit" in captured.out
+    assert "code-path q values" in captured.out
+    assert "rank-wise scalar formula" in captured.out
+    assert "final diagnosis" in captured.out
+
+
+def test_min_normalized_descending_example() -> None:
+    assert _min_normalized_descending((50, 38, 37, 1, 1)) == (49, 37, 36, 0, 0)
+
+
+def test_normalized_scalar_value_translation_invariant() -> None:
+    state = (50, 38, 37, 1, 1)
+    shifted = tuple(value + 7 for value in state)
+
+    assert _min_normalized_descending(state) == _min_normalized_descending(shifted)
+    assert abs(
+        _rank_chase_future_centered_value(_min_normalized_descending(state), 10)
+        - _rank_chase_future_centered_value(_min_normalized_descending(shifted), 10)
+    ) < 1e-12
+
+
+def test_k5_normalized_scalar_convention_audit_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_normalized_scalar_convention_audit(
+        cases=_parse_k5_q_audit_states("10:6,3,3,0,0"),
+    )
+
+    captured = capsys.readouterr()
+    assert "k=5 normalized scalar convention audit" in captured.out
+    assert "MATCH FOUND" in captured.out or "no normalized scalar variant matched" in captured.out
+
+
+def test_k5_rank_adaptive_dp_recursion_residual_small() -> None:
+    rows = k5_rank_adaptive_dp_recursion_audit_rows(
+        _parse_k5_q_audit_states("10:6,3,3,0,0"),
+    )
+
+    assert rows
+    row = rows[0]
+    assert abs(row.recursion_residual) < 1e-10
+
+
+def test_k5_rank_adaptive_dp_q_expr_decomposition_matches() -> None:
+    rows = k5_rank_adaptive_dp_recursion_audit_rows(
+        _parse_k5_q_audit_states("10:6,3,3,0,0"),
+    )
+
+    assert rows
+    row = rows[0]
+    assert abs(row.q_expr - row.decomposed_q_expr) < 1e-10
+
+
+def test_k5_rank_adaptive_dp_recursion_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_rank_adaptive_dp_recursion_audit(
+        cases=_parse_k5_q_audit_states("10:6,3,3,0,0"),
+    )
+
+    captured = capsys.readouterr()
+    assert "rank-adaptive DP recursion audit" in captured.out
+    assert "q_expr decomposition" in captured.out
+    assert "proof-ready formula" in captured.out
+
+
+def test_k5_rank_adaptive_curvature_formula_matches_decomposition() -> None:
+    rows = k5_rank_adaptive_curvature_rows(
+        h_values=(10,),
+        s1_values=(1.0,),
+        s2_values=(1.0,),
+    )
+
+    assert rows
+    row = rows[0]
+    assert abs(row.q_expr_direct - row.q_expr_curvature) < 1e-10
+
+
+def test_k5_rank_adaptive_curvature_known_h150_constant() -> None:
+    rows = k5_rank_adaptive_curvature_rows(
+        h_values=(150,),
+        s1_values=(1.1,),
+        s2_values=(3.0,),
+        compare_lp=True,
+    )
+
+    assert rows
+    row = rows[0]
+    assert row.state == (50, 37, 37, 0, 0)
+    assert abs(row.scaled_c - 1.327967) < 5e-4
+    assert row.lp_scaled_c is not None
+    assert abs(row.scaled_c - row.lp_scaled_c) < 5e-4
+
+
+def test_k5_rank_adaptive_curvature_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_rank_adaptive_curvature_report(
+        h_values=(10,),
+        s1_values=(1.0,),
+        s2_values=(1.0,),
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "rank-adaptive curvature report" in captured.out
+    assert "D1 = N_T - N_P" in captured.out
+    assert "max C" in captured.out
+
+
+def test_k5_packet122_curvature_growth_reproduces_h200_known_point() -> None:
+    summaries = k5_packet122_curvature_growth_summaries(
+        h_values=(200,),
+        s1_values=(0.9,),
+        s2_values=(1.5,),
+    )
+
+    assert summaries
+    summary = summaries[0]
+    assert summary.best_row.state == (34, 21, 21, 0, 0)
+    assert abs(summary.best_row.scaled_c - 1.561969) < 5e-4
+
+
+def test_k5_packet122_curvature_growth_alpha_sqrt_h_computed() -> None:
+    summaries = k5_packet122_curvature_growth_summaries(
+        h_values=(10,),
+        s1_values=(1.0,),
+        s2_values=(1.0,),
+    )
+
+    assert summaries
+    summary = summaries[0]
+    assert abs(summary.alpha_sqrt_h - summary.alpha * (summary.horizon ** 0.5)) < 1e-12
+
+
+def test_k5_packet122_curvature_growth_parallel_run() -> None:
+    summaries, validations = k5_packet122_curvature_growth_run(
+        h_values=(10, 12),
+        s1_values=(1.0,),
+        s2_values=(1.0,),
+        compare_lp=True,
+        lp_top_n=1,
+        jobs=2,
+    )
+
+    assert {summary.horizon for summary in summaries} == {10, 12}
+    assert {row.horizon for row in validations} == {10, 12}
+
+
+def test_k5_packet122_curvature_growth_compare_lp_known_h150() -> None:
+    rows = k5_rank_adaptive_curvature_rows(
+        h_values=(150,),
+        s1_values=(1.1,),
+        s2_values=(3.0,),
+        compare_lp=True,
+    )
+
+    assert rows
+    row = rows[0]
+    assert row.lp_alpha is not None
+    assert abs(row.lp_alpha - row.q_expr_curvature / 3.0) < 1e-7
+
+
+def test_k5_packet122_curvature_growth_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_packet122_curvature_growth_report(
+        h_values=(10,),
+        s1_values=(1.0,),
+        s2_values=(1.0,),
+        compare_lp=True,
+        lp_top_n=1,
+    )
+
+    captured = capsys.readouterr()
+    assert "packet122 curvature growth report" in captured.out
+    assert "LP-validated ridge" in captured.out
+    assert "active_constraints" in captured.out
+    assert "log-log beta" in captured.out
+    assert "alpha_sqrt_h" in captured.out
+
+
+def test_k5_packet122_active_regime_detects_formula_invalid_row() -> None:
+    rows = k5_packet122_active_regime_rows(
+        h_values=(12,),
+        s1_values=(1.0,),
+        s2_values=(1.0,),
+    )
+
+    assert rows
+    assert not rows[0].formula_valid
+
+
+def test_k5_packet122_active_regime_detects_formula_valid_ridge_row() -> None:
+    rows = k5_packet122_active_regime_rows(
+        h_values=(150,),
+        s1_values=(1.1,),
+        s2_values=(3.0,),
+    )
+
+    assert rows
+    assert rows[0].state == (50, 37, 37, 0, 0)
+    assert rows[0].formula_valid
+
+
+def test_k5_packet122_active_regime_parallel_run() -> None:
+    rows = k5_packet122_active_regime_run(
+        h_values=(10, 12),
+        s1_values=(1.0,),
+        s2_values=(1.0,),
+        jobs=2,
+    )
+
+    assert rows
+    assert {row.horizon for row in rows} == {10, 12}
+
+
+def test_k5_packet122_active_regime_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_packet122_active_regime_map(
+        h_values=(10,),
+        s1_values=(1.0,),
+        s2_values=(1.0,),
+        n=2,
+    )
+
+    captured = capsys.readouterr()
+    assert "packet122 active regime map" in captured.out
+    assert "Formula validity map" in captured.out
+    assert "Best LP C by h" in captured.out
+
+
+def test_k5_packet122_lp_state_probe_tiny_smoke() -> None:
+    rows = k5_packet122_lp_state_probe_rows(
+        _parse_k5_q_audit_states("20:9,5,5,0,0"),
+        clear_cache_between_states=True,
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.packet_type == (1, 2, 2)
+    assert row.lp_alpha == pytest.approx(row.lp_alpha)
+    assert row.active_count_vectors
+
+
+def test_k5_packet122_lp_state_probe_known_h150_formula_valid() -> None:
+    rows = k5_packet122_lp_state_probe_rows(
+        _parse_k5_q_audit_states("150:50,37,37,0,0"),
+        clear_cache_between_states=True,
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.formula_valid
+    assert abs(row.lp_alpha - row.formula_alpha) <= 1e-7
+
+
+def test_k5_packet122_lp_state_probe_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_packet122_lp_state_probe(
+        cases=_parse_k5_q_audit_states("20:9,5,5,0,0"),
+        clear_cache_between_states=True,
+    )
+
+    captured = capsys.readouterr()
+    assert "packet122 LP state probe" in captured.out
+    assert "formula_valid" in captured.out
+    assert "active_constraints" in captured.out
+
+
+def test_k5_top3_transition_check_matches_full_embedding() -> None:
+    rows = k5_top3_transition_check_rows(((0, 0), (1, 0), (0, 1), (2, 3)), bottom_gap=20)
+
+    assert rows
+    for row in rows:
+        assert row.plus_top3_gap == row.plus_expected_gap
+        assert row.minus_top3_gap == row.minus_expected_gap
+
+
+def test_k5_top3_reflected_chain_rows_run() -> None:
+    rows = k5_top3_reflected_chain_rows(
+        cases=_parse_k5_q_audit_states("20:9,5,5,0,0"),
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.n == 19
+    assert row.a == 4
+    assert row.k3 == pytest.approx(row.k3)
+    assert row.full_alpha == pytest.approx(row.full_alpha)
+
+
+def test_k5_top3_reflected_chain_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_reflected_chain_report(
+        cases=_parse_k5_q_audit_states("20:9,5,5,0,0"),
+        transition_pairs=((0, 0), (1, 0)),
+    )
+
+    captured = capsys.readouterr()
+    assert "top3 reflected chain report" in captured.out
+    assert "Transition verification" in captured.out
+    assert "Proof-ready formula" in captured.out
+
+
+def test_k5_top3_local_time_formula_equals_dp() -> None:
+    rows = k5_top3_local_time_identity_rows(
+        n_values=(0, 1, 5, 10),
+        pairs=((0, 0), (1, 0), (0, 1), (4, 1)),
+    )
+
+    assert rows
+    for row in rows:
+        assert abs(row.residual) < 1e-12
+
+
+def test_k5_top3_local_time_curvature_equals_dp() -> None:
+    rows = k5_top3_local_time_curvature_rows(
+        cases=_parse_k5_q_audit_states("20:9,5,5,0,0"),
+    )
+
+    assert len(rows) == 1
+    assert abs(rows[0].residual) < 1e-12
+
+
+def test_k5_top3_local_time_identity_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_local_time_identity_report(
+        n_values=(5,),
+        pairs=((0, 0), (1, 0)),
+        cases=_parse_k5_q_audit_states("20:9,5,5,0,0"),
+    )
+
+    captured = capsys.readouterr()
+    assert "top3 local-time identity report" in captured.out
+    assert "pathwise formula" in captured.out
+    assert "K3 local-time curvature" in captured.out
+
+
+def test_k5_top3_m_recurrence_matches_local_time_dp() -> None:
+    for n in range(0, 5):
+        for r, s in ((0, 0), (1, 0), (0, 1), (3, 2)):
+            assert _top3_m_recurrence_value(n, r, s) == pytest.approx(_top3_m_value(n + 1, r, s))
+
+
+def test_k5_top3_k_recurrence_matches_direct_k() -> None:
+    for n in range(0, 5):
+        for a in (1, 2, 4):
+            assert _top3_k_recurrence_value(n, a) == pytest.approx(_top3_k_from_m(n + 1, a))
+
+
+def test_k5_top3_k_recurrence_rows_run() -> None:
+    rows = k5_top3_k_recurrence_rows(n_values=(1, 2, 5), max_a=4)
+
+    assert rows
+    for row in rows:
+        assert abs(row.residual) < 1e-12
+
+
+def test_k5_top3_k_recurrence_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_k_recurrence_report(
+        max_n=10,
+        sample_n_values=(1, 2, 5, 10),
+        n=3,
+    )
+
+    captured = capsys.readouterr()
+    assert "top3 K recurrence report" in captured.out
+    assert "candidate barrier" in captured.out
+    assert "LaTeX-ready recurrence" in captured.out
+
+
+def test_k5_top3_difference_closure_reproduces_k_expansion() -> None:
+    expanded = _top3_expand_stencil(_top3_candidate_stencils()["K"])
+
+    assert expanded[(2, 1)] == pytest.approx(0.5)
+    assert expanded[(1, 0)] == pytest.approx(0.5)
+    assert expanded[(0, 0)] == pytest.approx(0.25)
+    assert expanded[(0, -2)] == pytest.approx(0.25)
+    assert expanded[(1, 1)] == pytest.approx(-0.75)
+    assert expanded[(1, -1)] == pytest.approx(-0.75)
+
+
+def test_k5_top3_difference_closure_k_matches_recurrence_report() -> None:
+    stencil = _top3_candidate_stencils()["K"]
+
+    assert _top3_stencil_value(stencil, 10, 4) == pytest.approx(_top3_k_from_m(10, 4))
+
+
+def test_k5_top3_difference_family_summaries_run() -> None:
+    summaries = k5_top3_difference_family_summaries(max_n=10, min_a=3)
+
+    assert summaries
+    assert any(summary.name == "K" for summary in summaries)
+
+
+def test_k5_top3_difference_closure_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_difference_closure_report(max_n=10, min_a=3, n=3)
+
+    captured = capsys.readouterr()
+    assert "top3 difference closure report" in captured.out
+    assert "candidate finite-difference family" in captured.out
+    assert "closure attempt" in captured.out
+
+
+def test_k5_top3_hitting_identity_matches_m() -> None:
+    rows = k5_top3_hitting_identity_rows(
+        n_values=(0, 1, 5, 10),
+        pairs=((0, 0), (1, 0), (0, 1), (4, 1)),
+    )
+
+    assert rows
+    for row in rows:
+        assert row.m_value == pytest.approx(row.half_hitting_sum)
+
+
+def test_k5_top3_hitting_kernel_matches_k() -> None:
+    rows = k5_top3_hitting_kernel_rows(
+        cases=_parse_k5_q_audit_states("20:9,5,5,0,0"),
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.k_value == pytest.approx(row.half_kernel_sum)
+
+
+def test_k5_top3_kernel_term_sums_to_k() -> None:
+    n_value = 10
+    a = 4
+    half_sum = 0.5 * sum(_top3_kernel_term(t, a) for t in range(n_value))
+
+    assert half_sum == pytest.approx(_top3_k_from_m(n_value, a))
+
+
+def test_k5_top3_hitting_kernel_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_hitting_kernel_report(
+        cases=_parse_k5_q_audit_states("20:9,5,5,0,0"),
+        n_values=(5,),
+        pairs=((0, 0), (1, 0)),
+        n=3,
+    )
+
+    captured = capsys.readouterr()
+    assert "top3 hitting kernel report" in captured.out
+    assert "K as hitting-probability sum" in captured.out
+    assert "telescoping search" in captured.out
+
+
+def test_k5_top3_kernel_pairing_reconstructs_k() -> None:
+    rows = k5_top3_kernel_pairing_rows(cases=((20, 4),))
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.k_value == pytest.approx(row.half_kernel_sum)
+    assert row.pair_reconstruction_residual == pytest.approx(0.0)
+    assert row.k_value == pytest.approx(row.even_half_sum + row.odd_half_sum)
+
+
+def test_k5_top3_kernel_pairing_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_kernel_pairing_report(cases=((20, 4),), top_count=3)
+
+    captured = capsys.readouterr()
+    assert "top3 kernel pairing report" in captured.out
+    assert "adjacent-pair cancellation" in captured.out
+    assert "parity-separated sums" in captured.out
+
+
+def test_k5_top3_telescoping_identity_residual_is_zero() -> None:
+    rows = k5_top3_telescoping_candidate_rows(a_values=(1, 2, 4), max_t=20)
+    by_name = {row.name: row for row in rows}
+
+    assert by_name["I2: pair_t = A_{t+2} - A_t"].max_abs_residual == pytest.approx(0.0)
+    assert by_name["I1: pair_t = A_{t+1} - A_t"].max_abs_residual > 0.0
+
+
+def test_k5_top3_parity_telescope_matches_direct_k() -> None:
+    rows = k5_top3_parity_telescope_rows(a_values=(1, 3, 4), max_n=40)
+
+    assert rows
+    for row in rows:
+        assert row.k_value == pytest.approx(row.telescope_value)
+
+
+def test_k5_top3_telescoping_identity_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_telescoping_identity_report(
+        a_values=(1, 2, 4),
+        identity_max_t=12,
+        parity_max_n=20,
+        barrier_max_n=40,
+        barrier_a_values=(1, 2, 4),
+    )
+
+    captured = capsys.readouterr()
+    assert "top3 telescoping identity report" in captured.out
+    assert "exact adjacent-pair identity" in captured.out
+    assert "parity telescope" in captured.out
+    assert "endpoint barrier" in captured.out
+
+
+def test_k5_top3_endpoint_barrier_recurrences_are_exact() -> None:
+    rows = k5_top3_endpoint_recurrence_rows(a_values=(2, 3, 4), max_n=20)
+
+    assert rows
+    for row in rows:
+        assert row.max_abs_residual == pytest.approx(0.0)
+
+
+def test_k5_top3_endpoint_barrier_maxima_match_known_values() -> None:
+    rows = {row.name: row for row in k5_top3_endpoint_barrier_rows(max_n=1000)}
+
+    assert rows["A"].sign_holds is True
+    assert rows["k"].sign_holds is True
+    assert rows["A"].max_scaled == pytest.approx(1.0)
+    assert rows["A"].argmax_n == 1
+    assert rows["A"].argmax_a == 1
+    assert rows["k"].max_scaled == pytest.approx(1.5)
+    assert rows["k"].argmax_n == 1
+    assert rows["k"].argmax_a == 1
+
+
+def test_k5_top3_endpoint_barrier_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_endpoint_barrier_report(
+        a_values=(1, 2, 4),
+        recurrence_max_n=12,
+        max_n=40,
+    )
+
+    captured = capsys.readouterr()
+    assert "top3 endpoint barrier report" in captured.out
+    assert "A via |A_{n+1}|" in captured.out
+    assert "k via interior k_{n+1} recurrence" in captured.out
+    assert "induction does not close" in captured.out
+
+
+def test_k5_top3_endpoint_coupling_transition_graph_agrees_with_direct_chain() -> None:
+    rows = {
+        (row.family, row.discrepancy): row
+        for row in k5_top3_endpoint_coupling_graph_rows(max_steps=10)
+    }
+
+    assert rows[("A/B-adjacent", (1, -1))].plus_discrepancies == ((0, 1), (1, -1))
+    assert rows[("A/B-adjacent", (1, -1))].minus_discrepancies == ((-1, 0), (1, -1))
+    assert rows[("A/B-adjacent", (0, 1))].minus_discrepancies == ((0, 1),)
+    assert rows[("A/B-adjacent", (-1, 0))].plus_discrepancies == ((-1, 0),)
+    assert rows[("C-adjacent", (1, 0))].plus_discrepancies == ((1, 0),)
+    assert rows[("C-adjacent", (1, 0))].minus_discrepancies == ((-1, 1), (1, 0))
+    assert rows[("C-adjacent", (0, -1))].minus_discrepancies == ((0, -1),)
+    assert rows[("C-adjacent", (-1, 1))].plus_discrepancies == ((-1, 1), (0, -1))
+
+
+def test_k5_top3_dense_endpoint_barrier_reproduces_known_maxima() -> None:
+    rows = {row.name: row for row in k5_top3_dense_endpoint_barrier_rows(max_n=1000)}
+
+    assert rows["A"].sign_holds is True
+    assert rows["k"].sign_holds is True
+    assert rows["A"].max_scaled == pytest.approx(1.0)
+    assert rows["A"].argmax_n == 1
+    assert rows["A"].argmax_a == 1
+    assert rows["k"].max_scaled == pytest.approx(1.5)
+    assert rows["k"].argmax_n == 1
+    assert rows["k"].argmax_a == 1
+
+
+def test_k5_top3_dense_endpoint_barrier_accepts_a_limit() -> None:
+    rows = {row.name: row for row in k5_top3_dense_endpoint_barrier_rows(max_n=20, max_a_per_n=3)}
+
+    assert set(rows) == {"A", "k"}
+    assert rows["A"].argmax_a is not None
+    assert rows["A"].argmax_a <= 3
+    assert rows["k"].argmax_a is not None
+    assert rows["k"].argmax_a <= 3
+
+
+def test_k5_top3_endpoint_coupling_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_endpoint_coupling_report(
+        a_values=(1, 2, 4),
+        n_values=(0, 1, 2, 5),
+        graph_max_steps=8,
+        max_n=40,
+    )
+
+    captured = capsys.readouterr()
+    assert "top3 endpoint coupling report" in captured.out
+    assert "discrepancy transition graph" in captured.out
+    assert "dense endpoint barrier" in captured.out
+
+
+def test_k5_top3_endpoint_coupling_can_skip_dense_barrier(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_endpoint_coupling_report(
+        a_values=(1, 2),
+        n_values=(0, 1),
+        graph_max_steps=4,
+        max_n=20,
+        skip_dense_barrier=True,
+        clear_top3_cache_after=True,
+    )
+
+    captured = capsys.readouterr()
+    assert "top3 endpoint coupling report" in captured.out
+    assert "skipped by --skip-dense-barrier" in captured.out
+
+
+def test_k5_top3_discrepancy_chain_labels_cover_three_states() -> None:
+    labels = _top3_endpoint_graph_label_summary()
+    ab_labels = {label for family, _, label in labels if family == "A/B-adjacent"}
+    c_labels = {label for family, _, label in labels if family == "C-adjacent"}
+
+    assert "adjacent along same spread level" in ab_labels
+    assert "adjacent across spread levels" in ab_labels
+    assert "reflected discrepancy" in ab_labels
+    assert "adjacent along same spread level" in c_labels
+    assert "adjacent across spread levels" in c_labels
+    assert "reflected discrepancy" in c_labels
+
+
+def test_k5_top3_ballot_candidate_rows_run() -> None:
+    rows = k5_top3_ballot_candidate_rows(a_values=(1, 2), n_values=(0, 1, 2))
+
+    assert rows
+    assert all(row.best_candidate for row in rows)
+    assert all(row.best_abs_error >= 0.0 for row in rows)
+
+
+def test_k5_top3_discrepancy_chain_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_discrepancy_chain_symbolic_report(
+        a_values=(1, 2),
+        n_values=(0, 1, 2),
+        graph_max_steps=4,
+        dense_max_n=20,
+        n=8,
+    )
+
+    captured = capsys.readouterr()
+    assert "discrepancy chain symbolic report" in captured.out
+    assert "signed endpoint formula" in captured.out
+    assert "candidate ballot formula" in captured.out
+
+
+def test_k5_top3_discrepancy_generating_sequences_match_direct() -> None:
+    sequence = _fraction_sequence_for_endpoint("A", 1, 6)
+
+    assert len(sequence) == 6
+    for n_value, value in enumerate(sequence):
+        assert float(value) == pytest.approx(_top3_a_term(n_value, 1))
+
+
+def test_k5_top3_discrepancy_generating_recurrence_rows_validate() -> None:
+    rows = k5_top3_discrepancy_generating_recurrence_rows(
+        a_values=(1,),
+        fit_terms=20,
+        validate_terms=40,
+        max_order=8,
+    )
+
+    assert rows
+    for row in rows:
+        if row.order is not None:
+            assert row.max_validate_residual == 0
+
+
+def test_k5_top3_discrepancy_generating_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_discrepancy_generating_function_report(
+        a_values=(1,),
+        n_values=(0, 1, 2),
+        fit_terms=20,
+        validate_terms=40,
+        max_order=8,
+        n=12,
+    )
+
+    captured = capsys.readouterr()
+    assert "discrepancy generating function report" in captured.out
+    assert "guessed recurrence" in captured.out
+    assert "endpoint coefficient bound" in captured.out
+
+
+def test_k5_top3_discrepancy_barrier_signed_transforms_nonnegative() -> None:
+    for n_value in range(20):
+        for a in range(1, n_value + 3):
+            assert _top3_signed_endpoint_value("A", n_value, a) >= -1e-15
+            assert _top3_signed_endpoint_value("k", n_value, a) >= -1e-15
+
+
+def test_k5_top3_discrepancy_barrier_reproduces_endpoint_maxima() -> None:
+    rows = {
+        (row.name, row.barrier): row
+        for row in k5_top3_discrepancy_barrier_certificate_rows(
+            max_n=40,
+            dense_a_limit=20,
+            barriers=("n",),
+        )
+    }
+
+    assert rows[("A", "n")].constant == pytest.approx(1.0)
+    assert rows[("k", "n")].constant == pytest.approx(1.5)
+
+
+def test_k5_top3_discrepancy_barrier_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_discrepancy_barrier_certificate_report(
+        max_n=40,
+        dense_a_limit=20,
+        recurrence_max_n=10,
+        recurrence_a_values=(1, 2, 3),
+        n=8,
+    )
+
+    captured = capsys.readouterr()
+    assert "discrepancy barrier certificate" in captured.out
+    assert "signed recurrence" in captured.out
+    assert "super-solution" in captured.out
+    assert "worst slack" in captured.out
+
+
+def test_k5_top3_endpoint_induction_reproduces_value_scan() -> None:
+    barrier_rows = {
+        (row.name, row.barrier): row
+        for row in k5_top3_discrepancy_barrier_certificate_rows(
+            max_n=40,
+            dense_a_limit=20,
+            barriers=("n",),
+        )
+    }
+    induction_rows = {
+        (row.target, row.barrier): row
+        for row in k5_top3_endpoint_induction_certificate_rows(
+            max_n=40,
+            dense_a_limit=20,
+            barrier="n",
+        )
+    }
+
+    assert induction_rows[("A", "n")].constant == pytest.approx(barrier_rows[("A", "n")].constant)
+
+
+def test_k5_top3_endpoint_induction_distinguishes_value_and_step_barriers() -> None:
+    rows = k5_top3_endpoint_induction_certificate_rows(
+        max_n=40,
+        dense_a_limit=20,
+        barrier="n",
+    )
+
+    assert rows
+    assert any((not row.closes) or row.obstruction != "none" for row in rows)
+    assert all(row.exact_worst_slack >= -1e-12 for row in rows)
+
+
+def test_k5_top3_endpoint_induction_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_endpoint_induction_certificate_report(
+        max_n=40,
+        dense_a_limit=20,
+        barriers=("n",),
+        n=8,
+    )
+
+    captured = capsys.readouterr()
+    assert "endpoint induction certificate" in captured.out
+    assert "true induction inequality" in captured.out
+    assert "worst induction slack" in captured.out
+
+
+def test_k5_top3_refined_discrepancy_barrier_reconstructs_aggregate() -> None:
+    for aggregate in ("A", "B", "C"):
+        for n_value in range(8):
+            for a in range(1, n_value + 3):
+                assert _top3_refined_label_aggregate_value(
+                    aggregate,
+                    n_value,
+                    a,
+                ) == pytest.approx(_top3_refined_aggregate_direct_value(aggregate, n_value, a))
+
+
+def test_k5_top3_refined_discrepancy_barrier_exposes_c_obstruction() -> None:
+    rows = k5_top3_refined_discrepancy_label_scan_rows(max_n=20, dense_a_limit=12)
+
+    assert rows
+    assert any(row.aggregate == "C" for row in rows)
+    assert any(row.first_negative is not None for row in rows if row.aggregate == "C")
+
+
+def test_k5_top3_refined_discrepancy_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_refined_discrepancy_barrier_report(
+        max_n=20,
+        dense_a_limit=12,
+        barriers=("n",),
+        recurrence_max_n=8,
+        n=8,
+    )
+
+    captured = capsys.readouterr()
+    assert "refined discrepancy barrier" in captured.out
+    assert "label-level recurrence" in captured.out
+    assert "induction slack" in captured.out
+    assert "reconstructs aggregate" in captured.out
+
+
+def test_k5_top3_endpoint_cone_reconstructs_targets() -> None:
+    specs = _top3_cone_form_specs()
+
+    for n_value in range(8):
+        for a in range(1, n_value + 3):
+            assert _top3_cone_form_value(specs["Aplus"], n_value, a) == pytest.approx(
+                _top3_signed_endpoint_value("A", n_value, a)
+            )
+            assert _top3_cone_form_value(specs["kplus"], n_value, a) == pytest.approx(
+                _top3_signed_endpoint_value("k", n_value, a)
+            )
+
+
+def test_k5_top3_endpoint_cone_reproduces_label_box_failures() -> None:
+    rows = {
+        row.name: row
+        for row in k5_top3_endpoint_cone_form_scan_rows(
+            max_n=20,
+            dense_a_limit=12,
+        )
+    }
+
+    assert rows["Aplus"].first_negative is None
+    assert rows["kplus"].first_negative is None
+    assert rows["Cplus"].first_negative is not None
+
+
+def test_k5_top3_endpoint_cone_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_endpoint_cone_certificate_report(
+        max_n=20,
+        dense_a_limit=12,
+        closure_max_n=8,
+        n=8,
+    )
+
+    captured = capsys.readouterr()
+    assert "endpoint cone certificate" in captured.out
+    assert "candidate linear forms" in captured.out
+    assert "cone closure" in captured.out
+    assert "inductive super-solution" in captured.out
+
+
+def test_k5_top3_endpoint_cone_expansion_reproduces_previous_fit() -> None:
+    rows, residuals = k5_top3_endpoint_cone_expansion_rows(
+        max_n=20,
+        dense_a_limit=12,
+        closure_max_n=8,
+    )
+
+    assert rows
+    assert residuals
+    assert any(row.basis_name == "base" and row.target == "kplus" for row in rows)
+    assert any(row.basis_name == "expanded" and row.target == "kplus" for row in rows)
+
+
+def test_k5_top3_endpoint_cone_expansion_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_endpoint_cone_expansion_report(
+        max_n=20,
+        dense_a_limit=12,
+        closure_max_n=8,
+        n=8,
+    )
+
+    captured = capsys.readouterr()
+    assert "endpoint cone expansion" in captured.out
+    assert "residual-driven forms" in captured.out
+    assert "true induction closure" in captured.out
+    assert "weaker constants" in captured.out
+
+
+def test_k5_top3_kplus_companion_reproduces_constants() -> None:
+    rows = {
+        row.name: row
+        for row in k5_top3_kplus_companion_scan_rows(
+            max_n=20,
+            dense_a_limit=12,
+        )
+    }
+
+    assert rows["A"].max_scaled == pytest.approx(1.0)
+    assert rows["K"].max_scaled == pytest.approx(1.5)
+    assert rows["Q1"].first_negative is None
+    assert rows["Q3"].first_negative is None
+
+
+def test_k5_top3_kplus_companion_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_kplus_companion_barrier_report(
+        max_n=20,
+        dense_a_limit=12,
+        closure_max_n=8,
+        n=8,
+    )
+
+    captured = capsys.readouterr()
+    assert "kplus companion barrier" in captured.out
+    assert "Q1 = kplus - Aplus" in captured.out
+    assert "Q3 = kplus - 3/2 Aplus" in captured.out
+    assert "K follows" in captured.out
+
+
+def test_k5_top3_endpoint_exact_image_rows_are_exact() -> None:
+    rows = _top3_endpoint_exact_image_rows(max_n=20, dense_a_limit=12)
+
+    assert rows
+    assert {row.name for row in rows} == {"A", "K", "Q3", "Q1", "B", "S"}
+    for row in rows:
+        assert row.max_abs_residual < 1e-12
+
+
+def test_k5_top3_endpoint_exact_image_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_endpoint_exact_image_report(
+        max_n=20,
+        dense_a_limit=12,
+    )
+
+    captured = capsys.readouterr()
+    assert "endpoint exact image report" in captured.out
+    assert "K image" in captured.out
+    assert "missing residual term" in captured.out
+    assert "boundary source" in captured.out
+
+
+def test_k5_top3_diagonal_discrepancy_matches_a_and_d() -> None:
+    for n_value in range(8):
+        for a in range(1, n_value + 3):
+            assert _top3_diagonal_discrepancy_value(0, n_value, a) == pytest.approx(
+                _top3_signed_endpoint_value("A", n_value, a)
+            )
+            assert _top3_diagonal_discrepancy_value(1, n_value, a) == pytest.approx(
+                _top3_signed_endpoint_value("D", n_value, a)
+            )
+
+
+def test_k5_top3_diagonal_discrepancy_recurrence_rows_are_exact() -> None:
+    rows = k5_top3_diagonal_discrepancy_recurrence_rows(
+        max_n=20,
+        dense_a_limit=12,
+        max_j=4,
+    )
+
+    assert rows
+    for row in rows:
+        assert row.max_abs_residual < 1e-12
+
+
+def test_k5_top3_diagonal_discrepancy_k_image_residual_is_zero() -> None:
+    for n_value in range(8):
+        for a in range(2, n_value + 3):
+            assert _top3_diagonal_k_image_e1_residual(n_value, a) == pytest.approx(0.0)
+
+
+def test_k5_top3_diagonal_discrepancy_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_diagonal_discrepancy_hierarchy_report(
+        max_n=20,
+        dense_a_limit=12,
+        max_j=4,
+    )
+
+    captured = capsys.readouterr()
+    assert "diagonal discrepancy hierarchy" in captured.out
+    assert "E_0 = Aplus" in captured.out
+    assert "E_1 = Dplus" in captured.out
+    assert "K image implication" in captured.out
+
+
+def test_k5_top3_diagonal_heat_kernel_e1_representation_matches_direct() -> None:
+    for a in range(1, 8):
+        for n_value in range(0, 12):
+            assert _top3_diagonal_e1_representation_value(n_value, a) == pytest.approx(
+                _top3_diagonal_discrepancy_value(1, n_value, a)
+            )
+
+
+def test_k5_top3_diagonal_heat_kernel_reflected_child_matches_boundary_recurrence() -> None:
+    for j in range(1, 5):
+        for n_value in range(0, 12):
+            left = _top3_diagonal_discrepancy_value(j, n_value + 1, j)
+            right = 0.5 * (
+                _top3_diagonal_discrepancy_value(j - 1, n_value, j)
+                + _top3_diagonal_reflected_boundary_child_value(n_value, j)
+            )
+            assert left == pytest.approx(right)
+
+
+def test_k5_top3_diagonal_heat_kernel_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_diagonal_heat_kernel_report(
+        max_n=20,
+        dense_a_limit=12,
+        max_j=4,
+    )
+
+    captured = capsys.readouterr()
+    assert "diagonal heat-kernel report" in captured.out
+    assert "Duhamel representation" in captured.out
+    assert "E_1 bound" in captured.out
+    assert "reflected boundary child" in captured.out
+
+
+def test_k5_top3_reflected_boundary_convolution_decomposition_residuals_are_small() -> None:
+    rows = k5_top3_reflected_boundary_convolution_residual_rows(
+        max_n=20,
+        dense_a_limit=12,
+    )
+
+    assert rows
+    assert max(row.max_abs_residual for row in rows) < 1e-12
+
+
+def test_k5_top3_reflected_boundary_convolution_is_nonnegative_on_scan() -> None:
+    rows = {
+        row.name: row
+        for row in k5_top3_reflected_boundary_convolution_scan_rows(
+            max_n=20,
+            dense_a_limit=12,
+        )
+    }
+
+    assert rows["Rref"].sign_holds
+    for a in range(1, 8):
+        for n_value in range(max(0, a - 2), 12):
+            assert _top3_diagonal_e1_reflected_boundary_contribution(n_value, a) >= -1e-12
+
+
+def test_k5_top3_reflected_boundary_convolution_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_reflected_boundary_convolution_report(
+        max_n=20,
+        dense_a_limit=12,
+    )
+
+    captured = capsys.readouterr()
+    assert "reflected-boundary convolution" in captured.out
+    assert "Rref" in captured.out
+    assert "a/sqrt(n) bins" in captured.out
+    assert "candidate envelope" in captured.out
+
+
+def test_k5_top3_reflected_convolution_analytic_scan_rows_are_finite() -> None:
+    rows = k5_top3_reflected_convolution_analytic_scan_rows(
+        max_n=20,
+        dense_a_limit=12,
+        verification_max_n=20,
+        verification_a_limit=12,
+    )
+
+    assert rows
+    assert all(np.isfinite(row.kernel_constant) for row in rows)
+    assert all(np.isfinite(row.source_constant) for row in rows)
+    assert all(np.isfinite(row.unit_max_scaled) for row in rows)
+    assert all(np.isfinite(row.max_scaled_upper) for row in rows)
+    assert all(row.max_scaled_upper >= 0.0 for row in rows)
+
+
+def test_k5_top3_reflected_convolution_analytic_bound_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_reflected_convolution_analytic_bound_report(
+        max_n=20,
+        dense_a_limit=12,
+    )
+
+    captured = capsys.readouterr()
+    assert "reflected convolution analytic bound" in captured.out
+    assert "kernel bound" in captured.out
+    assert "source envelope" in captured.out
+    assert "abstract convolution inequality" in captured.out
+
+
+def test_k5_top3_reflected_source_grid_matches_exact_child_on_small_grid() -> None:
+    source_grid = _top3_reflected_source_grid(max_n=20, dense_a_limit=12)
+
+    for t in range(21):
+        for a in range(1, min(t + 2, 12) + 1):
+            assert abs(source_grid[t, a] - _top3_diagonal_reflected_boundary_child_value(t, a)) < 1e-12
+
+
+def test_k5_top3_reflected_source_gaussian_envelope_upper_bounds_small_grid() -> None:
+    source_grid = _top3_reflected_source_grid(max_n=20, dense_a_limit=12)
+    rows = k5_top3_reflected_source_gaussian_envelope_rows(
+        max_n=20,
+        dense_a_limit=12,
+        source_grid=source_grid,
+    )
+
+    assert rows
+    best_row = min(rows, key=lambda item: item.source_constant)
+    for t in range(21):
+        for a in range(1, min(t + 2, 12) + 1):
+            envelope = best_row.source_constant * _top3_reflected_source_gaussian_envelope_value(
+                t,
+                a,
+                best_row.family_name,
+                best_row.heat_c,
+            )
+            assert source_grid[t, a] <= envelope + 1e-12
+
+
+def test_k5_top3_reflected_source_gaussian_convolution_scan_is_finite() -> None:
+    source_grid = _top3_reflected_source_grid(max_n=20, dense_a_limit=12)
+    source_rows = k5_top3_reflected_source_gaussian_envelope_rows(
+        max_n=20,
+        dense_a_limit=12,
+        source_grid=source_grid,
+    )
+    best_row = min(source_rows, key=lambda item: item.source_constant)
+    rows = k5_top3_reflected_convolution_gaussian_scan_rows(
+        max_n=20,
+        dense_a_limit=12,
+        source_row=best_row,
+        verification_max_n=20,
+        verification_a_limit=12,
+    )
+
+    assert rows
+    assert all(np.isfinite(row.max_scaled_upper) for row in rows)
+    assert all(row.max_scaled_upper >= 0.0 for row in rows)
+
+
+def test_k5_top3_reflected_source_gaussian_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_reflected_source_gaussian_report(
+        max_n=20,
+        dense_a_limit=12,
+    )
+
+    captured = capsys.readouterr()
+    assert "reflected source gaussian" in captured.out
+    assert "Gaussian source envelope" in captured.out
+    assert "new convolution upper" in captured.out
+    assert "old envelope too crude" in captured.out
+
+
+def test_k5_top3_reflected_gradient_convolution_source_bounds_small_grid() -> None:
+    source_grid = _top3_reflected_source_grid(max_n=20, dense_a_limit=12)
+    rows = [
+        row
+        for row in k5_top3_reflected_source_gaussian_envelope_rows(
+            max_n=20,
+            dense_a_limit=12,
+            source_grid=source_grid,
+        )
+        if row.family_name == "(a+1)/(t+1)^(3/2)*exp"
+    ]
+
+    assert rows
+    best_row = min(rows, key=lambda item: item.source_constant)
+    for t in range(21):
+        for a in range(1, min(t + 2, 12) + 1):
+            envelope = best_row.source_constant * _top3_reflected_source_gaussian_envelope_value(
+                t,
+                a,
+                best_row.family_name,
+                best_row.heat_c,
+            )
+            assert source_grid[t, a] <= envelope + 1e-12
+
+
+def test_k5_top3_reflected_gradient_convolution_upper_is_finite_and_improves() -> None:
+    source_grid = _top3_reflected_source_grid(max_n=20, dense_a_limit=12)
+    source_rows = k5_top3_reflected_source_gaussian_envelope_rows(
+        max_n=20,
+        dense_a_limit=12,
+        source_grid=source_grid,
+    )
+    rows = k5_top3_reflected_gradient_convolution_scan_rows(
+        max_n=20,
+        dense_a_limit=12,
+        source_rows=source_rows,
+        verification_max_n=20,
+        verification_a_limit=12,
+    )
+    old_rows = k5_top3_reflected_convolution_analytic_scan_rows(
+        max_n=20,
+        dense_a_limit=12,
+        verification_max_n=20,
+        verification_a_limit=12,
+        heat_c_values=(2.0, 4.0, 8.0, 16.0, 32.0),
+        source_name="min(1,(a+1)/(t+1))",
+    )
+
+    assert rows
+    assert all(np.isfinite(row.max_scaled_upper) for row in rows)
+    assert all(row.max_scaled_upper >= 0.0 for row in rows)
+    assert min(row.max_scaled_upper for row in rows) <= min(row.max_scaled_upper for row in old_rows) + 1e-12
+
+
+def test_k5_top3_reflected_gradient_convolution_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_reflected_gradient_convolution_report(
+        max_n=20,
+        dense_a_limit=12,
+    )
+
+    captured = capsys.readouterr()
+    assert "reflected gradient convolution" in captured.out
+    assert "source gradient envelope" in captured.out
+    assert "gradient convolution upper" in captured.out
+    assert "proof split" in captured.out
+
+
+def test_k5_top3_endpoint_polytope_reproduces_companion_constants() -> None:
+    rows = {
+        row.name: row
+        for row in k5_top3_kplus_companion_scan_rows(
+            max_n=20,
+            dense_a_limit=12,
+        )
+    }
+    closure_rows = {
+        row.target: row
+        for row in k5_top3_endpoint_polytope_closure_rows(
+            max_n=20,
+            dense_a_limit=12,
+            closure_max_n=8,
+        )
+    }
+
+    assert rows["K"].max_scaled == pytest.approx(1.5)
+    assert rows["Q3"].max_scaled == pytest.approx(0.5)
+    assert "K<=1.5" in closure_rows
+
+
+def test_k5_top3_endpoint_polytope_printer_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    print_k5_top3_endpoint_polytope_barrier_report(
+        max_n=20,
+        dense_a_limit=12,
+        closure_max_n=8,
+        n=8,
+    )
+
+    captured = capsys.readouterr()
+    assert "endpoint polytope barrier" in captured.out
+    assert "normalized convex hull" in captured.out
+    assert "halfspace induction closure" in captured.out
 
 
 def test_fixed_action_policy_returns_balanced_complement() -> None:
