@@ -3017,14 +3017,20 @@ def test_multi_step_bellman_pattern_miner_printer_runs(capsys: pytest.CaptureFix
         finite_steps=2,
         large_gap_h_values=(1,),
         large_gap_max_used=2,
+        families=("F1", "F4"),
+        large_gap_only=True,
         n=2,
     )
 
     captured = capsys.readouterr()
     assert "k5 multi-step Bellman pattern miner" in captured.out
     assert "low-gap residual SCC taxonomy" in captured.out
+    assert "skipped by --large-gap-only" in captured.out
     assert "multi-step closure tests" in captured.out
     assert "large-gap influence graph coverage" in captured.out
+    assert "large_gap_families: ('F1', 'F4')" in captured.out
+    assert "F1:" in captured.out
+    assert "F4:" in captured.out
     assert "c=1/2 orbit cone status" in captured.out
 
 
@@ -3761,6 +3767,14 @@ def test_large_gap_barrier_streaming_chunks_and_merge_runs(
         h_values=(1,),
         max_used=2,
         row_mode="coverage",
+        n=1,
+    )
+    print_k5_large_gap_barrier_audit_report(
+        h_values=(1,),
+        max_used=2,
+        families=("F1",),
+        row_mode="true-large-gap",
+        dry_run=True,
         n=1,
     )
     print_k5_large_gap_barrier_audit_report(

@@ -17337,37 +17337,46 @@ def print_k5_multi_step_bellman_pattern_miner_report(
     finite_steps: int = 200,
     large_gap_h_values: tuple[int, ...] = (4, 8),
     large_gap_max_used: int = 8,
+    families: Sequence[str] | None = None,
+    large_gap_only: bool = False,
     include_c_half_cone: bool = False,
     n: int = 80,
     tolerance: float = 1e-10,
 ) -> None:
-    components = k5_low_gap_discrete_maximum_principle_components(
-        h_max=h_max,
-        max_used=max_used,
-        branch_horizon=branch_horizon,
-        max_new_generators=max_new_generators,
-        tolerance=tolerance,
-    )
-    cyclic = k5_low_gap_cyclic_component_closure_data(
-        h_max=h_max,
-        max_used=max_used,
-        branch_horizon=branch_horizon,
-        max_new_generators=max_new_generators,
-        finite_steps=finite_steps,
-        tolerance=tolerance,
-    )
+    family_filter = _large_gap_family_filter(families)
+    if large_gap_only:
+        components: tuple[LowGapDiscreteMaximumPrincipleComponentRow, ...] = ()
+        cyclic: tuple[LowGapCyclicComponentClosureData, ...] = ()
+        low_gap_recurrence_rows: tuple[LowGapBellmanImageRecurrenceRow, ...] = ()
+    else:
+        components = k5_low_gap_discrete_maximum_principle_components(
+            h_max=h_max,
+            max_used=max_used,
+            branch_horizon=branch_horizon,
+            max_new_generators=max_new_generators,
+            tolerance=tolerance,
+        )
+        cyclic = k5_low_gap_cyclic_component_closure_data(
+            h_max=h_max,
+            max_used=max_used,
+            branch_horizon=branch_horizon,
+            max_new_generators=max_new_generators,
+            finite_steps=finite_steps,
+            tolerance=tolerance,
+        )
+        low_gap_recurrence_rows = k5_low_gap_bellman_image_recurrence_rows(
+            h_max=h_max,
+            max_used=max_used,
+            focus="all",
+            branch_horizon=branch_horizon,
+            max_new_generators=max_new_generators,
+            tolerance=tolerance,
+        )
     cyclic_by_index = {row.component_index: row for row in cyclic}
-    low_gap_recurrence_rows = k5_low_gap_bellman_image_recurrence_rows(
-        h_max=h_max,
-        max_used=max_used,
-        focus="all",
-        branch_horizon=branch_horizon,
-        max_new_generators=max_new_generators,
-        tolerance=tolerance,
-    )
     row_by_variable = {row.variable: row for row in low_gap_recurrence_rows}
     large_gap_counts_by_family: dict[str, dict[str, int]] = {}
-    for family in _INFLUENCE_FAMILIES:
+    selected_families = family_filter or _INFLUENCE_FAMILIES
+    for family in selected_families:
         large_gap_counts_by_family[family] = _large_gap_light_coverage_counts(
             large_gap_max_used,
             large_gap_h_values,
@@ -17394,16 +17403,21 @@ def print_k5_multi_step_bellman_pattern_miner_report(
     print(f"  finite_steps: {finite_steps}")
     print(f"  large_gap_h_values: {large_gap_h_values}")
     print(f"  large_gap_max_used: {large_gap_max_used}")
+    print(f"  large_gap_families: {selected_families}")
+    print(f"  large_gap_only: {large_gap_only}")
     print()
 
     by_kind: dict[str, int] = defaultdict(int)
     for component in components:
         by_kind[_multi_step_component_kind(component)] += 1
     print("1. low-gap residual SCC taxonomy")
-    print(f"  components: {len(components)}")
-    print(f"  recurrence rows: {len(low_gap_recurrence_rows)}")
-    for kind, count in sorted(by_kind.items()):
-        print(f"  {kind}: {count}")
+    if large_gap_only:
+        print("  skipped by --large-gap-only")
+    else:
+        print(f"  components: {len(components)}")
+        print(f"  recurrence rows: {len(low_gap_recurrence_rows)}")
+        for kind, count in sorted(by_kind.items()):
+            print(f"  {kind}: {count}")
     print()
 
     print("2. nontrivial SCCs and multi-step closures")
@@ -17457,7 +17471,7 @@ def print_k5_multi_step_bellman_pattern_miner_report(
             print(f"    row {row.variable}: source={_fraction_text(row.source_term)} edges={edge_text}")
         printed += 1
     if printed == 0:
-        print("  no nontrivial SCCs found.")
+        print("  skipped by --large-gap-only." if large_gap_only else "  no nontrivial SCCs found.")
     print()
 
     print("3. multi-step closure tests suggested by SCCs")
@@ -17469,7 +17483,7 @@ def print_k5_multi_step_bellman_pattern_miner_report(
 
     print("4. large-gap influence graph coverage, RAM-light")
     print("  This section is classification/counts only; it does not certify target inequalities.")
-    for family in _INFLUENCE_FAMILIES:
+    for family in selected_families:
         counts = large_gap_counts_by_family[family]
         print(
             f"  {family}: true_large={counts['true_large_gap_checks']}"
@@ -23508,8 +23522,10 @@ def k5_direct_route_large_gap_domination_rows(
     h_max: int = 15,
     max_used: int = 8,
     h_values: tuple[int, ...] | None = None,
+    families: Sequence[str] | None = None,
 ) -> tuple[DirectRouteLargeGapDominationRow, ...]:
     horizons = _k5_balanced_mdp_h_values(h_values, h_max)
+    family_filter = _large_gap_family_filter(families)
     depth = max(horizons, default=0) + max_used + 1
     full_solution = _k5_balanced_mdp_full_solution(depth)
     half_solution = _k5_balanced_mdp_half_solution(depth)
@@ -23523,6 +23539,9 @@ def k5_direct_route_large_gap_domination_rows(
     for horizon in horizons:
         for family, state in state_rows:
             for gap_index, gap_before in enumerate(_gap_vector(state)):
+                influence_family = _large_gap_influence_family(state, gap_index)
+                if family_filter is not None and influence_family not in family_filter:
+                    continue
                 key = (horizon, family, state, gap_index)
                 if key in seen:
                     continue
@@ -23704,11 +23723,13 @@ def k5_direct_route_large_gap_influence_decay_rows(
     max_used: int = 12,
     h_values: tuple[int, ...] | None = None,
     tolerance: float = 1e-10,
+    families: Sequence[str] | None = None,
 ) -> tuple[DirectRouteLargeGapInfluenceDecayRow, ...]:
     domination_rows = k5_direct_route_large_gap_domination_rows(
         h_max=h_max,
         max_used=max_used,
         h_values=h_values,
+        families=families,
     )
     return tuple(
         DirectRouteLargeGapInfluenceDecayRow(
@@ -25200,6 +25221,7 @@ def k5_large_gap_influence_cone_source_certificate_rows(
     max_used: int = 12,
     h_values: tuple[int, ...] | None = None,
     tolerance: float = 1e-10,
+    families: Sequence[str] | None = None,
 ) -> tuple[tuple[K5LargeGapInfluenceConeSourceCertificateRow, ...], dict[str, float], bool, str]:
     influence_rows = tuple(
         row
@@ -25208,6 +25230,7 @@ def k5_large_gap_influence_cone_source_certificate_rows(
             max_used=max_used,
             h_values=h_values,
             tolerance=tolerance,
+            families=families,
         )
         if row.gap_value >= 2
     )
@@ -25416,12 +25439,14 @@ def k5_large_gap_influence_cone_proof_export_rows(
     max_used: int = 12,
     h_values: tuple[int, ...] | None = None,
     tolerance: float = 1e-10,
+    families: Sequence[str] | None = None,
 ) -> tuple[tuple[K5LargeGapInfluenceConeProofExportRow, ...], dict[str, Fraction], bool]:
     source_rows, _fitted_b, _feasible, _message = k5_large_gap_influence_cone_source_certificate_rows(
         h_max=h_max,
         max_used=max_used,
         h_values=h_values,
         tolerance=tolerance,
+        families=families,
     )
     constants = _default_large_gap_influence_safe_b()
     used_default = _large_gap_source_rows_close(source_rows, constants)
@@ -25849,6 +25874,7 @@ def _large_gap_barrier_chunk_certificate_dict(
             max_used=max_used,
             h_values=(h_value,),
             tolerance=tolerance,
+            families=families,
         )
         true_large_rows = [row for row in influence_rows if row.gap_value >= 2]
         low_gap_boundary_rows = [row for row in influence_rows if row.gap_value <= 1]
@@ -25863,6 +25889,7 @@ def _large_gap_barrier_chunk_certificate_dict(
             max_used=max_used,
             h_values=(h_value,),
             tolerance=tolerance,
+            families=families,
         )
     if families is not None:
         proof_rows = tuple(row for row in proof_rows if row.family in families)
@@ -45773,6 +45800,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="large-gap dry-run horizons as separate values or comma-separated chunks",
     )
     k5_multi_step_bellman_pattern_miner_parser.add_argument("--large-gap-max-used", type=int, default=8)
+    k5_multi_step_bellman_pattern_miner_parser.add_argument("--families", nargs="*", default=None)
+    k5_multi_step_bellman_pattern_miner_parser.add_argument("--large-gap-only", action="store_true")
     k5_multi_step_bellman_pattern_miner_parser.add_argument("--include-c-half-cone", action="store_true")
     k5_multi_step_bellman_pattern_miner_parser.add_argument("--tolerance", type=float, default=1e-10)
     k5_multi_step_bellman_pattern_miner_parser.add_argument("-n", type=int, default=80)
@@ -46344,6 +46373,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="print lightweight coverage/counts for the selected chunks without materializing target inequalities",
+    )
+    k5_large_gap_barrier_audit_parser.add_argument(
+        "--dry-run-counts",
+        action="store_true",
+        help="alias for --dry-run; print row counts without constructing certificates",
     )
     k5_large_gap_barrier_audit_parser.add_argument("--families", nargs="*", default=None)
     k5_large_gap_barrier_audit_parser.add_argument(
@@ -47879,6 +47913,8 @@ def main() -> None:
             finite_steps=args.finite_steps,
             large_gap_h_values=_parse_T_values(",".join(args.large_gap_h_values)),
             large_gap_max_used=args.large_gap_max_used,
+            families=args.families,
+            large_gap_only=args.large_gap_only,
             include_c_half_cone=args.include_c_half_cone,
             n=args.n,
             tolerance=args.tolerance,
@@ -48380,7 +48416,7 @@ def main() -> None:
             n=args.n,
             tolerance=args.tolerance,
             streaming=args.streaming,
-            dry_run=args.dry_run,
+            dry_run=args.dry_run or args.dry_run_counts,
             families=args.families,
             true_large_gap_only=args.true_large_gap_only,
             low_gap_boundary_only=args.low_gap_boundary_only,
