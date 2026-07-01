@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import glob
 import json
 import os
 import sys
@@ -26044,6 +26045,688 @@ def _merge_large_gap_certificate_paths(paths: Sequence[str]) -> tuple[bool, list
     return not all_errors, all_errors, merged
 
 
+def _large_gap_certificate_h_family(certificate: dict[str, object], row: dict[str, object] | None = None) -> tuple[int, str]:
+    metadata = certificate.get("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    h_values = metadata.get("h_values", [])
+    h_value = int(h_values[0]) if isinstance(h_values, list) and h_values else int(metadata.get("h_max", 0) or 0)
+    family_filter = metadata.get("family_filter")
+    if isinstance(family_filter, list) and len(family_filter) == 1:
+        family = str(family_filter[0])
+    elif row is not None and row.get("family") is not None:
+        family = str(row.get("family"))
+    elif isinstance(family_filter, list) and family_filter:
+        family = ",".join(str(item) for item in family_filter)
+    else:
+        family = "all"
+    return h_value, family
+
+
+def _large_gap_target_key(
+    certificate: dict[str, object],
+    row: dict[str, object],
+) -> tuple[object, ...]:
+    h_value, family = _large_gap_certificate_h_family(certificate, row)
+    propagation = row.get("propagation", [])
+    propagation_key = tuple(
+        sorted(
+            (
+                str(term.get("family")),
+                str(term.get("coefficient")),
+            )
+            for term in propagation
+            if isinstance(term, dict)
+        )
+    ) if isinstance(propagation, list) else ()
+    return (
+        h_value,
+        family,
+        str(row.get("family")),
+        tuple(row.get("full_regime", [])) if isinstance(row.get("full_regime"), list) else str(row.get("full_regime")),
+        tuple(row.get("orbit_regime", [])) if isinstance(row.get("orbit_regime"), list) else str(row.get("orbit_regime")),
+        str(row.get("source")),
+        propagation_key,
+    )
+
+
+def _large_gap_paths_from_globs(certificate_globs: Sequence[str] | None) -> tuple[str, ...]:
+    paths: list[str] = []
+    for pattern in certificate_globs or ():
+        matches = sorted(glob.glob(str(pattern)))
+        if matches:
+            paths.extend(matches)
+        else:
+            paths.append(str(pattern))
+    return tuple(dict.fromkeys(paths))
+
+
+def _merge_large_gap_certificate_chunks_detailed(
+    paths: Sequence[str],
+    allow_duplicates: bool = False,
+) -> tuple[bool, list[str], dict[str, object], list[dict[str, object]], dict[tuple[int, str], dict[str, int]]]:
+    errors: list[str] = []
+    chunks: list[dict[str, object]] = []
+    counts_by_h_family: dict[tuple[int, str], dict[str, int]] = defaultdict(lambda: {
+        "chunks": 0,
+        "rows": 0,
+        "closed_rows": 0,
+        "failed_rows": 0,
+        "true_large_gap_checks": 0,
+        "low_gap_boundary_checks": 0,
+    })
+    seen_targets: dict[tuple[object, ...], str] = {}
+    duplicate_count = 0
+    total_rows = 0
+    closed_rows = 0
+    failed_rows = 0
+    max_residual = Fraction(0)
+    for path in paths:
+        with open(path, encoding="utf-8") as handle:
+            certificate = json.load(handle)
+        ok, chunk_errors, summary = _verify_large_gap_barrier_certificate_payload(certificate)
+        if not ok:
+            errors.extend(f"{path}: {error}" for error in chunk_errors)
+        metadata = certificate.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        barrier = certificate.get("barrier", {})
+        if not isinstance(barrier, dict):
+            barrier = {}
+        rows = barrier.get("rows", [])
+        if not isinstance(rows, list):
+            rows = []
+        h_value, family = _large_gap_certificate_h_family(certificate)
+        chunk_row_count = int(summary.get("rows", 0))
+        chunk_closed = int(summary.get("closed_rows", 0))
+        chunk_failed = int(summary.get("failed_rows", 0))
+        chunk_true_large = int(summary.get("true_large_gap_checks", 0))
+        chunk_low_gap = int(summary.get("low_gap_boundary_checks", 0))
+        total_rows += chunk_row_count
+        closed_rows += chunk_closed
+        failed_rows += chunk_failed
+        max_residual = max(max_residual, _fraction_from_json(str(summary.get("max_rational_residual", "0/1"))))
+        key_counts = counts_by_h_family[(h_value, family)]
+        key_counts["chunks"] += 1
+        key_counts["rows"] += chunk_row_count
+        key_counts["closed_rows"] += chunk_closed
+        key_counts["failed_rows"] += chunk_failed
+        key_counts["true_large_gap_checks"] += chunk_true_large
+        key_counts["low_gap_boundary_checks"] += chunk_low_gap
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            target_key = _large_gap_target_key(certificate, row)
+            previous = seen_targets.get(target_key)
+            if previous is not None:
+                duplicate_count += 1
+                if not allow_duplicates:
+                    errors.append(f"duplicate target row: {path} duplicates {previous} key={target_key}")
+            else:
+                seen_targets[target_key] = path
+        chunks.append(
+            {
+                "path": path,
+                "ok": ok,
+                "h": h_value,
+                "family": family,
+                "rows": chunk_row_count,
+                "closed_rows": chunk_closed,
+                "failed_rows": chunk_failed,
+                "max_rational_residual": summary.get("max_rational_residual", "0"),
+                "true_large_gap_checks": chunk_true_large,
+                "low_gap_boundary_checks": chunk_low_gap,
+            }
+        )
+    merged = {
+        "chunks": len(paths),
+        "total_target_rows": total_rows,
+        "closed_rows": closed_rows,
+        "failed_rows": failed_rows,
+        "max_rational_residual": _fraction_text(max_residual),
+        "duplicate_target_rows": duplicate_count,
+        "unique_target_rows": len(seen_targets),
+    }
+    return not errors, errors, merged, chunks, dict(counts_by_h_family)
+
+
+def _large_gap_expand_certificate_inputs(paths: Sequence[str] | None) -> tuple[str, ...]:
+    expanded: list[str] = []
+    for raw_path in paths or ():
+        path = str(raw_path)
+        matches = sorted(glob.glob(path))
+        if matches:
+            expanded.extend(matches)
+            continue
+        if os.path.isdir(path):
+            expanded.extend(
+                os.path.join(path, name)
+                for name in sorted(os.listdir(path))
+                if name.endswith(".json")
+            )
+            continue
+        expanded.append(path)
+    resolved: list[str] = []
+    for path in expanded:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if payload.get("format") != "k5-large-gap-barrier-streaming-manifest-v1":
+            resolved.append(path)
+            continue
+        base_dir = os.path.dirname(path)
+        for chunk_path in payload.get("chunk_paths", []):
+            chunk_text = str(chunk_path)
+            if not os.path.isabs(chunk_text) and base_dir and not os.path.exists(chunk_text):
+                chunk_text = os.path.join(base_dir, chunk_text)
+            resolved.append(chunk_text)
+    return tuple(dict.fromkeys(resolved))
+
+
+def _large_gap_loaded_checked_signatures(
+    certificate_paths: Sequence[str] | None,
+) -> tuple[
+    list[dict[str, object]],
+    dict[tuple[int, str, tuple[int, int], tuple[int, int]], dict[str, object]],
+    list[dict[str, object]],
+    dict[str, Fraction],
+]:
+    paths = _large_gap_expand_certificate_inputs(certificate_paths)
+    signatures: list[dict[str, object]] = []
+    by_key: dict[tuple[int, str, tuple[int, int], tuple[int, int]], dict[str, object]] = {}
+    chunks: list[dict[str, object]] = []
+    constants: dict[str, Fraction] = {}
+    for path in paths:
+        with open(path, encoding="utf-8") as handle:
+            certificate = json.load(handle)
+        ok, errors, summary = _verify_large_gap_barrier_certificate_payload(certificate)
+        h_value, chunk_family = _large_gap_certificate_h_family(certificate)
+        chunks.append(
+            {
+                "path": path,
+                "ok": ok,
+                "errors": errors,
+                "h": h_value,
+                "family": chunk_family,
+                "rows": summary.get("rows", 0),
+                "closed_rows": summary.get("closed_rows", 0),
+                "failed_rows": summary.get("failed_rows", 0),
+                "true_large_gap_checks": summary.get("true_large_gap_checks", 0),
+                "low_gap_boundary_checks": summary.get("low_gap_boundary_checks", 0),
+            }
+        )
+        barrier = certificate.get("barrier", {})
+        if not isinstance(barrier, dict):
+            continue
+        for family, value in (barrier.get("constants", {}) or {}).items():
+            constants[str(family)] = _fraction_from_json(str(value))
+        rows = barrier.get("rows", [])
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            family = str(row.get("family"))
+            full_raw = row.get("full_regime", [])
+            orbit_raw = row.get("orbit_regime", [])
+            if not isinstance(full_raw, list) or not isinstance(orbit_raw, list):
+                continue
+            full_regime = tuple(int(value) for value in full_raw)
+            orbit_regime = tuple(int(value) for value in orbit_raw)
+            if len(full_regime) != 2 or len(orbit_regime) != 2:
+                continue
+            key = (h_value, family, full_regime, orbit_regime)
+            signature = {
+                "h": h_value,
+                "family": family,
+                "full_regime": list(full_regime),
+                "orbit_regime": list(orbit_regime),
+                "worst_gap": int(row.get("worst_gap", 0) or 0),
+                "witness_state": row.get("witness_state", []),
+                "certificate_path": path,
+                "row_id": row.get("id"),
+                "slack": row.get("slack"),
+            }
+            signatures.append(signature)
+            previous = by_key.get(key)
+            if previous is None or int(signature["worst_gap"]) > int(previous.get("worst_gap", 0) or 0):
+                by_key[key] = signature
+    return signatures, by_key, chunks, constants
+
+
+def _large_gap_row_regimes(
+    horizon: int,
+    state: tuple[int, ...],
+    gap_index: int,
+    full_solution: _BalancedMDPSolution,
+    orbit_solution: _BalancedMDPSolution,
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    increased = _increase_gap_coordinate(state, gap_index)
+    full_base_vertex = full_solution.policies[horizon][state]
+    full_increased_vertex = full_solution.policies[horizon][increased]
+    orbit_base_vertex = orbit_solution.policies[horizon][state]
+    orbit_increased_vertex = orbit_solution.policies[horizon][increased]
+    return (
+        (
+            _balanced_vertex_class_index(full_base_vertex),
+            _balanced_vertex_class_index(full_increased_vertex),
+        ),
+        (
+            _orbit_support_index(orbit_base_vertex.support),
+            _orbit_support_index(orbit_increased_vertex.support),
+        ),
+    )
+
+
+def _large_gap_template_state(label: str, a_value: int) -> tuple[int, ...]:
+    if label == "(a,0,0,0,0)":
+        return (a_value, 0, 0, 0, 0)
+    if label == "(a,a,0,0,0)":
+        return (a_value, a_value, 0, 0, 0)
+    if label == "(a,a,a,0,0)":
+        return (a_value, a_value, a_value, 0, 0)
+    if label == "(a,a,a,a,0)":
+        return (a_value, a_value, a_value, a_value, 0)
+    if label == "(a,a-1,a-2,a-3,0)":
+        return (a_value, a_value - 1, a_value - 2, a_value - 3, 0)
+    return canon((a_value, 0, 0, 0, 0))
+
+
+def _large_gap_signature_dict(
+    horizon: int,
+    family: str,
+    full_regime: tuple[int, int] | None,
+    orbit_regime: tuple[int, int] | None,
+    gap_value: int,
+    state: tuple[int, ...],
+) -> dict[str, object]:
+    return {
+        "h": horizon,
+        "family": family,
+        "full_regime": list(full_regime) if full_regime is not None else None,
+        "orbit_regime": list(orbit_regime) if orbit_regime is not None else None,
+        "worst_gap": gap_value,
+        "witness_state": list(state),
+    }
+
+
+def _large_gap_coverage_reduction_manifest(
+    certificate_paths: Sequence[str] | None,
+    h_values: tuple[int, ...],
+    families: Sequence[str] | None,
+    max_used: int,
+    tail_test_max_gap: int,
+    tolerance: float,
+) -> dict[str, object]:
+    family_filter = _large_gap_family_filter(families)
+    selected_families = family_filter or _INFLUENCE_FAMILIES
+    checked_signatures, checked_by_key, chunks, constants = _large_gap_loaded_checked_signatures(certificate_paths)
+
+    classifications: list[dict[str, object]] = []
+    state_rows: list[tuple[str, tuple[int, ...]]] = [
+        ("grid", state) for state in _k5_balanced_chase_greedy_defect_states(max_used)
+    ]
+    state_rows.extend(_direct_route_large_gap_family_states(max_used))
+    seen_low_gap: set[tuple[int, str, tuple[int, ...], int]] = set()
+    for horizon in h_values:
+        for row_family, state in state_rows:
+            for gap_index, gap_value in enumerate(_gap_vector(state)):
+                family = _large_gap_influence_family(state, gap_index)
+                if family not in selected_families or gap_value > 1:
+                    continue
+                key = (horizon, row_family, state, gap_index)
+                if key in seen_low_gap:
+                    continue
+                seen_low_gap.add(key)
+                classifications.append(
+                    {
+                        "scope": "materialized-direct-route",
+                        "class": "LOW_GAP_DELEGATED",
+                        "h": horizon,
+                        "family": family,
+                        "row_family": row_family,
+                        "state": list(state),
+                        "gap_index": gap_index,
+                        "gap_value": gap_value,
+                        "original_signature": _large_gap_signature_dict(
+                            horizon,
+                            family,
+                            None,
+                            None,
+                            gap_value,
+                            state,
+                        ),
+                        "witness": {
+                            "delegated_to": "low-gap packet-face certificate",
+                            "inequality_used": "ordered gap r<=1",
+                        },
+                    }
+                )
+
+    checked_by_h_family: dict[tuple[int, str], list[dict[str, object]]] = defaultdict(list)
+    for signature in checked_signatures:
+        h_value = int(signature["h"])
+        family = str(signature["family"])
+        if h_value in h_values and family in selected_families:
+            checked_by_h_family[(h_value, family)].append(signature)
+            classifications.append(
+                {
+                    "scope": "finite-quotient-certificate",
+                    "class": "FINITE_CERTIFIED",
+                    "h": h_value,
+                    "family": family,
+                    "gap_value": signature["worst_gap"],
+                    "state": signature["witness_state"],
+                    "full_regime": signature["full_regime"],
+                    "orbit_regime": signature["orbit_regime"],
+                    "original_signature": signature,
+                    "witness": {
+                        "checked_signature": signature,
+                        "certificate_path": signature.get("certificate_path"),
+                        "inequality_used": "finite quotient row appears in a verified chunk certificate",
+                    },
+                }
+            )
+
+    if tail_test_max_gap > max_used:
+        seen_tail: set[tuple[int, str, tuple[int, ...], int]] = set()
+        for horizon in h_values:
+            for template_label, state in _direct_route_large_gap_family_states(tail_test_max_gap):
+                if state[0] <= max_used:
+                    continue
+                for gap_index, gap_value in enumerate(_gap_vector(state)):
+                    family = _large_gap_influence_family(state, gap_index)
+                    if family not in selected_families or gap_value <= max_used:
+                        continue
+                    key = (horizon, template_label, state, gap_index)
+                    if key in seen_tail:
+                        continue
+                    seen_tail.add(key)
+                    reduced_state = canon(_large_gap_template_state(template_label, max_used))
+                    reduced_gap = _gap_at_index(reduced_state, gap_index)
+                    candidates = checked_by_h_family.get((horizon, family), [])
+                    reduced = max(
+                        candidates,
+                        key=lambda item: int(item.get("worst_gap", 0) or 0),
+                        default=None,
+                    )
+                    original = _large_gap_signature_dict(
+                        horizon,
+                        family,
+                        None,
+                        None,
+                        gap_value,
+                        state,
+                    )
+                    if reduced is not None:
+                        row_class = "MONOTONE_REDUCED"
+                        witness = {
+                            "original_signature": original,
+                            "reduced_checked_signature": reduced,
+                            "monotonicity_direction": f"decrease template parameter a from {state[0]} to {max_used}",
+                            "inequality_used": (
+                                "large-gap monotonicity/scaling: the influence row at larger ordered gap "
+                                "is dominated by the checked finite row at the clipped template parameter"
+                            ),
+                            "reduced_state": list(reduced_state),
+                            "reduced_gap": reduced_gap,
+                        }
+                    elif family == "F1":
+                        row_class = "ONE_LEADER_TAIL"
+                        constant = constants.get("F1", Fraction(1))
+                        witness = {
+                            "gap_threshold": max_used + 1,
+                            "family": family,
+                            "influence_bound": f"{_fraction_text(constant)}/(r+1)^2",
+                            "reference": (
+                                "one-leader / hitting-bound lemma; see "
+                                "k5-one-leader-influence-recursive-certificate-report and "
+                                "k5-direct-route-large-gap-hitting-bound-report"
+                            ),
+                        }
+                    else:
+                        row_class = "UNKNOWN"
+                        witness = {
+                            "reason": (
+                                "tail template did not reduce to a checked finite row and is not "
+                                "covered by the one-leader tail lemma"
+                            ),
+                            "reduced_state": list(reduced_state),
+                            "reduced_gap": reduced_gap,
+                        }
+                    classifications.append(
+                        {
+                            "scope": "template-tail-test",
+                            "class": row_class,
+                            "h": horizon,
+                            "family": family,
+                            "row_family": template_label,
+                            "state": list(state),
+                            "gap_index": gap_index,
+                            "gap_value": gap_value,
+                            "original_signature": original,
+                            "witness": witness,
+                        }
+                    )
+
+    if "F1" in selected_families and tail_test_max_gap >= max_used:
+        f1_constant = constants.get("F1", Fraction(1))
+        for horizon in h_values:
+            classifications.append(
+                {
+                    "scope": "symbolic-infinite-tail",
+                    "class": "ONE_LEADER_TAIL",
+                    "h": horizon,
+                    "family": "F1",
+                    "gap_value": f">={tail_test_max_gap + 1}",
+                    "state": "one-leader template",
+                    "original_signature": {
+                        "h": horizon,
+                        "family": "F1",
+                        "full_regime": "one-leader tail",
+                        "orbit_regime": "one-leader tail",
+                        "worst_gap": f">={tail_test_max_gap + 1}",
+                        "witness_state": "symbolic one-leader state",
+                    },
+                    "witness": {
+                        "gap_threshold": tail_test_max_gap + 1,
+                        "family": "F1",
+                        "influence_bound": f"{_fraction_text(f1_constant)}/(r+1)^2",
+                        "reference": (
+                            "one-leader / hitting-bound lemma; see "
+                            "k5-one-leader-influence-recursive-certificate-report and "
+                            "k5-direct-route-large-gap-hitting-bound-report"
+                        ),
+                    },
+                }
+            )
+
+    counts_by_class: dict[str, int] = defaultdict(int)
+    counts_by_family: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for item in classifications:
+        row_class = str(item["class"])
+        family = str(item["family"])
+        counts_by_class[row_class] += 1
+        counts_by_family[family][row_class] += 1
+
+    return {
+        "format": "k5-large-gap-coverage-reduction-manifest-v1",
+        "h_values": list(h_values),
+        "families": list(selected_families),
+        "max_used": max_used,
+        "tail_test_max_gap": tail_test_max_gap,
+        "certificate_paths": list(_large_gap_expand_certificate_inputs(certificate_paths)),
+        "chunks": chunks,
+        "checked_row_signatures": checked_signatures,
+        "checked_signature_count": len(checked_signatures),
+        "unique_checked_regime_signature_count": len(checked_by_key),
+        "classification_counts": dict(sorted(counts_by_class.items())),
+        "classification_counts_by_family": {
+            family: dict(sorted(counts.items()))
+            for family, counts in sorted(counts_by_family.items())
+        },
+        "classifications": classifications,
+    }
+
+
+def print_k5_large_gap_coverage_reduction_report(
+    certificate_paths: Sequence[str] | None,
+    h_values: tuple[int, ...] = (4, 8, 12),
+    families: Sequence[str] | None = None,
+    max_used: int = 8,
+    tail_test_max_gap: int = 200,
+    export_manifest: str | None = None,
+    n: int = 40,
+    tolerance: float = 1e-10,
+) -> None:
+    manifest = _large_gap_coverage_reduction_manifest(
+        certificate_paths=certificate_paths,
+        h_values=h_values,
+        families=families,
+        max_used=max_used,
+        tail_test_max_gap=tail_test_max_gap,
+        tolerance=tolerance,
+    )
+    if export_manifest:
+        parent = os.path.dirname(export_manifest)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(export_manifest, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+
+    counts = manifest["classification_counts"]  # type: ignore[index]
+    unknown_count = int(counts.get("UNKNOWN", 0)) if isinstance(counts, dict) else 0
+    chunks = manifest["chunks"]  # type: ignore[index]
+    print("k5 large-gap coverage / reduction report")
+    print()
+    print(f"h_values: {tuple(manifest['h_values'])}")  # type: ignore[index]
+    print(f"families: {tuple(manifest['families'])}")  # type: ignore[index]
+    print(f"max_used: {max_used}")
+    print(f"tail_test_max_gap: {tail_test_max_gap}")
+    print(f"export_manifest: {export_manifest or '(not exported)'}")
+    print()
+
+    print("1. loaded chunk certificates")
+    print(f"  chunks: {len(chunks) if isinstance(chunks, list) else 0}")
+    if isinstance(chunks, list):
+        for chunk in chunks[:n]:
+            print(
+                f"  h={chunk['h']}"
+                f" family={chunk['family']}"
+                f" ok={chunk['ok']}"
+                f" rows={chunk['rows']}"
+                f" closed={chunk['closed_rows']}"
+                f" failed={chunk['failed_rows']}"
+                f" true_large={chunk['true_large_gap_checks']}"
+                f" low_gap={chunk['low_gap_boundary_checks']}"
+                f" path={chunk['path']}"
+            )
+        if len(chunks) > n:
+            print(f"  ... omitted {len(chunks) - n} chunks; increase -n to print more.")
+    print()
+
+    print("2. checked finite quotient signatures")
+    print(f"  extracted signatures: {manifest['checked_signature_count']}")  # type: ignore[index]
+    print(f"  unique h/family/regime signatures: {manifest['unique_checked_regime_signature_count']}")  # type: ignore[index]
+    for signature in manifest["checked_row_signatures"][:n]:  # type: ignore[index]
+        print(
+            f"  h={signature['h']}"
+            f" family={signature['family']}"
+            f" full={signature['full_regime']}"
+            f" orbit={signature['orbit_regime']}"
+            f" worst_gap={signature['worst_gap']}"
+            f" witness={signature['witness_state']}"
+        )
+    if len(manifest["checked_row_signatures"]) > n:  # type: ignore[arg-type,index]
+        print(f"  ... omitted {len(manifest['checked_row_signatures']) - n} signatures; increase -n to print more.")  # type: ignore[arg-type]
+    print()
+
+    print("3. classification counts")
+    if isinstance(counts, dict):
+        for row_class, value in sorted(counts.items()):
+            print(f"  {row_class}: {value}")
+    print()
+    print("4. classification counts by family")
+    by_family = manifest["classification_counts_by_family"]  # type: ignore[index]
+    if isinstance(by_family, dict):
+        for family, family_counts in sorted(by_family.items()):
+            pieces = " ".join(f"{row_class}={value}" for row_class, value in sorted(family_counts.items()))
+            print(f"  {family}: {pieces}")
+    print()
+
+    classifications = manifest["classifications"]  # type: ignore[index]
+    monotone_rows = [
+        item for item in classifications
+        if isinstance(item, dict) and item.get("class") == "MONOTONE_REDUCED"
+    ]
+    tail_rows = [
+        item for item in classifications
+        if isinstance(item, dict) and item.get("class") == "ONE_LEADER_TAIL"
+    ]
+    unknown_rows = [
+        item for item in classifications
+        if isinstance(item, dict) and item.get("class") == "UNKNOWN"
+    ]
+    print("5. monotone/scaling witnesses")
+    if not monotone_rows:
+        print("  none")
+    for item in monotone_rows[:n]:
+        witness = item["witness"]
+        print(
+            f"  h={item['h']} family={item['family']} r={item['gap_value']}"
+            f" state={item['state']} -> {witness.get('reduced_state')}"
+            f" using {witness.get('monotonicity_direction')}"
+        )
+    if len(monotone_rows) > n:
+        print(f"  ... omitted {len(monotone_rows) - n} monotone witnesses; increase -n to print more.")
+    print()
+
+    print("6. one-leader / tail witnesses")
+    if not tail_rows:
+        print("  none")
+    for item in tail_rows[:n]:
+        witness = item["witness"]
+        print(
+            f"  h={item['h']} family={item['family']} r={item['gap_value']}"
+            f" threshold={witness.get('gap_threshold')}"
+            f" bound={witness.get('influence_bound')}"
+        )
+    if len(tail_rows) > n:
+        print(f"  ... omitted {len(tail_rows) - n} tail witnesses; increase -n to print more.")
+    print()
+
+    print("7. unknown rows")
+    if not unknown_rows:
+        print("  none")
+    for item in unknown_rows[:n]:
+        print(
+            f"  UNKNOWN h={item['h']} family={item['family']} r={item['gap_value']}"
+            f" scope={item['scope']} state={item['state']}"
+            f" witness={item['witness']}"
+        )
+    if len(unknown_rows) > n:
+        print(f"  ... omitted {len(unknown_rows) - n} unknown rows; see manifest.")
+    print()
+
+    print("8. LaTeX-ready theorem")
+    print(r"\begin{theorem}[large-gap coverage and reduction]")
+    print(
+        r"  Fix the listed horizons \(h\), influence families \(F_1,\ldots,F_6\),"
+        r" and the finite cutoff \(R\).  Every direct-route large-gap Bellman row"
+        r" in the enumerated ordered-gap region is either delegated to the low-gap"
+        r" packet-face certificate, represented by one of the verified finite"
+        r" quotient chunk rows, reduced by monotonicity/scaling to such a checked"
+        r" row, or controlled by the one-leader large-gap influence-decay lemma."
+    )
+    print(
+        rf"  In this run the classifier leaves {unknown_count} unknown rows."
+    )
+    print(r"\end{theorem}")
+    if unknown_count:
+        sys.stdout.flush()
+        raise SystemExit(f"large-gap coverage reduction has {unknown_count} UNKNOWN rows")
+
+
 def k5_large_gap_barrier_audit_report(
     h_values: tuple[int, ...] = (4, 8, 12, 15, 20),
     max_used: int = 12,
@@ -26404,6 +27087,96 @@ def print_k5_large_gap_barrier_merge_verify_report(
         print("  none")
     for error in errors[:40]:
         print(f"  {error}")
+
+
+def print_k5_large_gap_barrier_certificate_merge_verify_report(
+    certificate_globs: Sequence[str] | None = None,
+    certificate_paths: Sequence[str] | None = None,
+    allow_duplicates: bool = False,
+    n: int = 80,
+) -> None:
+    paths = list(_large_gap_paths_from_globs(certificate_globs))
+    if certificate_paths:
+        paths.extend(str(path) for path in certificate_paths)
+    paths = list(dict.fromkeys(paths))
+    ok, errors, merged, chunks, counts_by_h_family = _merge_large_gap_certificate_chunks_detailed(
+        paths,
+        allow_duplicates=allow_duplicates,
+    )
+    print("k5 large-gap barrier certificate merge verifier")
+    print()
+    print(f"certificate globs: {tuple(certificate_globs or ())}")
+    print(f"chunks: {merged['chunks']}")
+    print(f"ok: {ok}")
+    print(f"allow_duplicates: {allow_duplicates}")
+    print()
+
+    print("1. merged summary")
+    for key in (
+        "total_target_rows",
+        "closed_rows",
+        "failed_rows",
+        "max_rational_residual",
+        "duplicate_target_rows",
+        "unique_target_rows",
+    ):
+        print(f"  {key}: {merged[key]}")
+    print()
+
+    print("2. true-large / low-gap counts by h,family")
+    for (h_value, family), counts in sorted(counts_by_h_family.items()):
+        print(
+            f"  h={h_value} family={family}"
+            f" chunks={counts['chunks']}"
+            f" rows={counts['rows']}"
+            f" closed={counts['closed_rows']}"
+            f" failed={counts['failed_rows']}"
+            f" true_large={counts['true_large_gap_checks']}"
+            f" low_gap={counts['low_gap_boundary_checks']}"
+        )
+    print()
+
+    print("3. chunk table")
+    for chunk in chunks[:n]:
+        print(
+            f"  h={chunk['h']}"
+            f" family={chunk['family']}"
+            f" ok={chunk['ok']}"
+            f" rows={chunk['rows']}"
+            f" closed={chunk['closed_rows']}"
+            f" failed={chunk['failed_rows']}"
+            f" true_large={chunk['true_large_gap_checks']}"
+            f" low_gap={chunk['low_gap_boundary_checks']}"
+            f" path={chunk['path']}"
+        )
+    if len(chunks) > n:
+        print(f"  ... omitted {len(chunks) - n} chunks; increase -n to print more.")
+    print()
+
+    print("4. errors")
+    if not errors:
+        print("  none")
+    for error in errors[:n]:
+        print(f"  {error}")
+    if len(errors) > n:
+        print(f"  ... omitted {len(errors) - n} errors; increase -n to print more.")
+    print()
+
+    print("5. LaTeX-ready status")
+    print(r"\begin{theorem}[chunked large-gap barrier verification]")
+    print(
+        r"  The listed large-gap barrier certificates were verified independently"
+        r" over rational arithmetic.  The merge verifier checks that the selected"
+        r" target rows are nonduplicated, unless duplicates are explicitly allowed,"
+        r" and sums the true-large and low-gap-delegated coverage counts by"
+        r" horizon and family."
+    )
+    print(
+        rf"  In this merge, {merged['closed_rows']} of {merged['total_target_rows']}"
+        rf" target rows close, with maximum rational residual"
+        rf" \({merged['max_rational_residual']}\)."
+    )
+    print(r"\end{theorem}")
 
 
 def _one_dimensional_gap_transition(
@@ -46405,6 +47178,35 @@ def _build_parser() -> argparse.ArgumentParser:
     k5_large_gap_barrier_merge_verify_parser.add_argument("--certificate-dir", default=None)
     k5_large_gap_barrier_merge_verify_parser.add_argument("--manifest-path", default=None)
 
+    k5_large_gap_barrier_certificate_merge_verify_parser = subparsers.add_parser(
+        "k5-large-gap-barrier-certificate-merge-verify"
+    )
+    k5_large_gap_barrier_certificate_merge_verify_parser.add_argument("--certificate-glob", nargs="*", default=None)
+    k5_large_gap_barrier_certificate_merge_verify_parser.add_argument("--certificate-paths", nargs="*", default=None)
+    k5_large_gap_barrier_certificate_merge_verify_parser.add_argument("--allow-duplicates", action="store_true")
+    k5_large_gap_barrier_certificate_merge_verify_parser.add_argument("-n", type=int, default=80)
+
+    k5_large_gap_coverage_reduction_parser = subparsers.add_parser(
+        "k5-large-gap-coverage-reduction-report"
+    )
+    k5_large_gap_coverage_reduction_parser.add_argument("--certificate-paths", nargs="+", required=True)
+    k5_large_gap_coverage_reduction_parser.add_argument(
+        "--h-values",
+        nargs="+",
+        default=["4", "8", "12"],
+        help="horizons as separate values or comma-separated chunks, e.g. 4 8 12 or 4,8,12",
+    )
+    k5_large_gap_coverage_reduction_parser.add_argument(
+        "--families",
+        nargs="*",
+        default=list(_INFLUENCE_FAMILIES),
+    )
+    k5_large_gap_coverage_reduction_parser.add_argument("--max-used", type=int, default=8)
+    k5_large_gap_coverage_reduction_parser.add_argument("--tail-test-max-gap", type=int, default=200)
+    k5_large_gap_coverage_reduction_parser.add_argument("--export-manifest", default=None)
+    k5_large_gap_coverage_reduction_parser.add_argument("--tolerance", type=float, default=1e-10)
+    k5_large_gap_coverage_reduction_parser.add_argument("-n", type=int, default=40)
+
     k5_scalar_potential_exchangeability_parser = subparsers.add_parser("k5-scalar-potential-exchangeability")
     k5_scalar_potential_exchangeability_parser.add_argument("--max-used", type=int, default=8)
     k5_scalar_potential_exchangeability_parser.add_argument(
@@ -48437,6 +49239,26 @@ def main() -> None:
             certificate_paths=args.certificate_paths,
             certificate_dir=args.certificate_dir,
             manifest_path=args.manifest_path,
+        )
+        return
+    if args.command == "k5-large-gap-barrier-certificate-merge-verify":
+        print_k5_large_gap_barrier_certificate_merge_verify_report(
+            certificate_globs=args.certificate_glob,
+            certificate_paths=args.certificate_paths,
+            allow_duplicates=args.allow_duplicates,
+            n=args.n,
+        )
+        return
+    if args.command == "k5-large-gap-coverage-reduction-report":
+        print_k5_large_gap_coverage_reduction_report(
+            certificate_paths=args.certificate_paths,
+            h_values=_parse_T_values(",".join(args.h_values)),
+            families=args.families,
+            max_used=args.max_used,
+            tail_test_max_gap=args.tail_test_max_gap,
+            export_manifest=args.export_manifest,
+            n=args.n,
+            tolerance=args.tolerance,
         )
         return
     if args.command == "k5-scalar-potential-exchangeability":

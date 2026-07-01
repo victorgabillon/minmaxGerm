@@ -356,6 +356,7 @@ from expert_game_lab.experiments import (
     print_k5_large_gap_one_leader_symbolic_report,
     print_k5_large_gap_multi_gap_potential_report,
     print_k5_large_gap_barrier_audit_report,
+    print_k5_large_gap_barrier_certificate_merge_verify_report,
     print_k5_large_gap_barrier_certificate_verify_report,
     print_k5_large_gap_barrier_merge_verify_report,
     print_k5_large_gap_one_dimensional_barrier_report,
@@ -3763,6 +3764,10 @@ def test_large_gap_barrier_streaming_chunks_and_merge_runs(
         n=1,
     )
     print_k5_large_gap_barrier_certificate_verify_report(str(direct_chunk_path))
+    print_k5_large_gap_barrier_certificate_merge_verify_report(
+        certificate_globs=(str(tmp_path / "direct_h1_*.json"),),
+        n=2,
+    )
     print_k5_large_gap_barrier_audit_report(
         h_values=(1,),
         max_used=2,
@@ -3791,6 +3796,8 @@ def test_large_gap_barrier_streaming_chunks_and_merge_runs(
     assert "chunk summary" in captured.out
     assert "merge verifier" in captured.out
     assert "k5 large-gap barrier merge verifier" in captured.out
+    assert "k5 large-gap barrier certificate merge verifier" in captured.out
+    assert "true-large / low-gap counts by h,family" in captured.out
     assert "single chunk direct export" in captured.out
     assert "row_mode: coverage" in captured.out
     assert "dry_run: True" in captured.out
