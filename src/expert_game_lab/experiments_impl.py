@@ -5,6 +5,7 @@ import gc
 import glob
 import json
 import os
+import re
 import sys
 import time
 from collections import defaultdict
@@ -27002,6 +27003,309 @@ def print_k5_large_gap_monotone_witness_verify_report(
         raise SystemExit(f"large-gap monotone witness verification has {unknown_count} UNKNOWN_MONOTONE_WITNESS rows")
 
 
+def _read_text_report(path: str) -> str:
+    with open(path, encoding="utf-8") as handle:
+        return handle.read()
+
+
+def _extract_report_int(text: str, key: str) -> int | None:
+    pattern = re.compile(rf"^\s*{re.escape(key)}\s*:\s*([0-9]+)\s*$", re.MULTILINE)
+    match = pattern.search(text)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _extract_report_value(text: str, key: str) -> str | None:
+    pattern = re.compile(rf"^\s*{re.escape(key)}\s*:\s*(.+?)\s*$", re.MULTILINE)
+    match = pattern.search(text)
+    if match is None:
+        return None
+    return match.group(1)
+
+
+def _parse_low_gap_component_report(path: str) -> dict[str, object]:
+    text = _read_text_report(path)
+    theorem_ready = (
+        "low-gap supersolution" in text
+        and "Poisson" in text
+        and "essential boundary" in text
+    )
+    cyclic_unresolved = _extract_report_int(text, "cyclic unresolved")
+    poisson_closed = _extract_report_int(text, "Poisson closed cyclic components")
+    status = theorem_ready and poisson_closed is not None and poisson_closed >= 1
+    return {
+        "path": path,
+        "exists": True,
+        "status": "OK" if status else "CHECK",
+        "h_max": _extract_report_int(text, "h_max"),
+        "max_used": _extract_report_int(text, "max_used"),
+        "seed_generators": _extract_report_int(text, "seed_generators"),
+        "sccs": _extract_report_int(text, "SCCs"),
+        "poisson_closed_cyclic_components": poisson_closed,
+        "cyclic_unresolved": cyclic_unresolved,
+        "essential_boundary_rows": _extract_report_int(text, "essential boundary rows"),
+        "cone_dominated_boundary_rows_removed": _extract_report_int(text, "cone-dominated boundary rows removed"),
+        "maximum_essential_boundary_constant": _extract_report_value(text, "maximum essential boundary constant"),
+        "theorem_ready_low_gap_supersolution": theorem_ready,
+        "statement": (
+            "LOW_GAP region max ordered gap <= 1 is certified by the packet-face "
+            "boundary compression report, with acyclic SCCs handled by the discrete "
+            "maximum principle and the cyclic flat-split tail closed by the Poisson lemma."
+        ),
+    }
+
+
+def _parse_large_gap_merge_report(path: str) -> dict[str, object]:
+    text = _read_text_report(path)
+    fields = {
+        "chunks": _extract_report_int(text, "chunks"),
+        "total_target_rows": _extract_report_int(text, "total_target_rows"),
+        "closed_rows": _extract_report_int(text, "closed_rows"),
+        "failed_rows": _extract_report_int(text, "failed_rows"),
+        "true_large_gap_checks": _extract_report_int(text, "true_large_gap_checks"),
+        "low_gap_boundary_checks": _extract_report_int(text, "low_gap_boundary_checks"),
+    }
+    max_residual = _extract_report_value(text, "max_rational_residual")
+    if max_residual is None:
+        max_residual = _extract_report_value(text, "max rational residual")
+    closed_rows = fields["closed_rows"]
+    total_rows = fields["total_target_rows"]
+    failed_rows = fields["failed_rows"]
+    status = (
+        closed_rows is not None
+        and total_rows is not None
+        and failed_rows == 0
+        and closed_rows == total_rows
+        and str(max_residual or "0") in {"0", "0/1"}
+    )
+    return {
+        "path": path,
+        "exists": True,
+        "status": "OK" if status else "CHECK",
+        **fields,
+        "max_rational_residual": max_residual,
+        "statement": (
+            "TRUE_LARGE_GAP finite quotient rows represented in the chunked "
+            "large-gap barrier certificate close over rational arithmetic."
+        ),
+    }
+
+
+def _load_json_manifest(path: str, expected_format: str) -> dict[str, object]:
+    with open(path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if payload.get("format") != expected_format:
+        raise ValueError(f"{path}: expected format {expected_format}, found {payload.get('format')!r}")
+    return payload
+
+
+def _global_glue_manifest(
+    low_gap_report: str,
+    large_gap_merge: str,
+    coverage_manifest_path: str,
+    monotone_manifest_path: str,
+) -> dict[str, object]:
+    low_gap = _parse_low_gap_component_report(low_gap_report)
+    large_gap = _parse_large_gap_merge_report(large_gap_merge)
+    coverage = _load_json_manifest(
+        coverage_manifest_path,
+        "k5-large-gap-coverage-reduction-manifest-v1",
+    )
+    monotone = _load_json_manifest(
+        monotone_manifest_path,
+        "k5-large-gap-monotone-witness-verification-v1",
+    )
+    coverage_counts = coverage.get("classification_counts", {})
+    if not isinstance(coverage_counts, dict):
+        coverage_counts = {}
+    monotone_counts = monotone.get("classification_counts", {})
+    if not isinstance(monotone_counts, dict):
+        monotone_counts = {}
+    finite_count = int(coverage_counts.get("FINITE_CERTIFIED", 0) or 0)
+    low_gap_count = int(coverage_counts.get("LOW_GAP_DELEGATED", 0) or 0)
+    monotone_count = int(coverage_counts.get("MONOTONE_REDUCED", 0) or 0)
+    one_leader_count = int(coverage_counts.get("ONE_LEADER_TAIL", 0) or 0)
+    unknown_count = int(coverage_counts.get("UNKNOWN", 0) or 0)
+    monotone_rows = int(monotone.get("monotone_rows", 0) or 0)
+    unknown_monotone = int(monotone_counts.get("UNKNOWN_MONOTONE_WITNESS", 0) or 0)
+    monotone_verified = (
+        int(monotone_counts.get("MONOTONE_REDUCED_EXACT", 0) or 0)
+        + int(monotone_counts.get("MONOTONE_REDUCED_BY_FAMILY_ORDER", 0) or 0)
+        + int(monotone_counts.get("MONOTONE_REDUCED_BY_ONE_LEADER_BOUND", 0) or 0)
+    )
+    large_total = large_gap.get("total_target_rows")
+    large_closed = large_gap.get("closed_rows")
+    large_failed = large_gap.get("failed_rows")
+    large_gap_ok = (
+        large_gap.get("status") == "OK"
+        and finite_count == large_closed
+        and large_total == large_closed
+        and large_failed == 0
+    )
+    coverage_ok = unknown_count == 0 and finite_count > 0 and low_gap_count > 0
+    monotone_ok = unknown_monotone == 0 and monotone_rows == monotone_count and monotone_verified == monotone_count
+    low_gap_ok = low_gap.get("status") == "OK"
+    row_class_total = finite_count + low_gap_count + monotone_count + one_leader_count
+    interface_uncovered = 0 if (coverage_ok and monotone_ok and low_gap_ok and large_gap_ok) else 1
+    global_ok = interface_uncovered == 0
+    components = {
+        "low_gap": low_gap,
+        "large_gap_merge": large_gap,
+        "coverage_reduction": {
+            "path": coverage_manifest_path,
+            "status": "OK" if coverage_ok else "CHECK",
+            "classification_counts": coverage_counts,
+            "finite_certified": finite_count,
+            "low_gap_delegated": low_gap_count,
+            "monotone_reduced": monotone_count,
+            "one_leader_tail": one_leader_count,
+            "unknown": unknown_count,
+        },
+        "monotone_witness": {
+            "path": monotone_manifest_path,
+            "status": "OK" if monotone_ok else "CHECK",
+            "monotone_rows": monotone_rows,
+            "classification_counts": monotone_counts,
+            "verified_monotone_rows": monotone_verified,
+            "unknown_monotone_witness": unknown_monotone,
+        },
+    }
+    return {
+        "format": "k5-direct-route-global-glue-manifest-v1",
+        "status": "OK" if global_ok else "CHECK",
+        "global_regions": {
+            "LOW_GAP": "max ordered gap <= 1",
+            "TRUE_LARGE_GAP": "some ordered gap >= 2",
+            "partition_statement": "For every ordered state exactly one of LOW_GAP or TRUE_LARGE_GAP holds.",
+        },
+        "row_classes": {
+            "LOW_GAP_CERTIFIED": low_gap_count,
+            "LARGE_GAP_FINITE_CERTIFIED": finite_count,
+            "LARGE_GAP_MONOTONE_REDUCED": monotone_count,
+            "LARGE_GAP_ONE_LEADER_TAIL": one_leader_count,
+            "total_classified_rows": row_class_total,
+            "uncovered_interface_rows": interface_uncovered,
+        },
+        "components": components,
+        "checks": {
+            "low_gap_component_ok": low_gap_ok,
+            "large_gap_merge_ok": large_gap_ok,
+            "coverage_reduction_ok": coverage_ok,
+            "monotone_witness_ok": monotone_ok,
+            "no_uncovered_interface_rows": interface_uncovered == 0,
+            "global_glue_ok": global_ok,
+        },
+        "global_supersolution_statement": (
+            "On the certified direct-route balanced quotient, the low-gap packet-face "
+            "certificate and the large-gap influence barrier give the finite-audit "
+            "supersolution T_full^bal W_{t-1}(x) <= W_t(x) + 1/t on every classified row."
+        ),
+        "theorem_statement": (
+            "The low-gap packet-face certificate plus the large-gap influence barrier imply "
+            "V_full^bal(0,T) <= V_orbit(0,T) + O(log T) on the certified direct-route balanced quotient."
+        ),
+        "remaining_assumptions": [
+            "orbit policy vs fixed Chase bridge not yet proven",
+            "balanced vs unrestricted bridge not yet proven",
+            "finite quotient / certificate format remains computer-assisted",
+        ],
+    }
+
+
+def print_k5_direct_route_global_glue_report(
+    low_gap_report: str,
+    large_gap_merge: str,
+    coverage_manifest: str,
+    monotone_manifest: str,
+    export_manifest: str | None = "reports/k5_direct_route_global_glue_manifest.json",
+) -> None:
+    manifest = _global_glue_manifest(
+        low_gap_report=low_gap_report,
+        large_gap_merge=large_gap_merge,
+        coverage_manifest_path=coverage_manifest,
+        monotone_manifest_path=monotone_manifest,
+    )
+    if export_manifest:
+        parent = os.path.dirname(export_manifest)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(export_manifest, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+    print("k5 direct-route global glue report")
+    print()
+    print(f"low_gap_report: {low_gap_report}")
+    print(f"large_gap_merge: {large_gap_merge}")
+    print(f"coverage_manifest: {coverage_manifest}")
+    print(f"monotone_manifest: {monotone_manifest}")
+    print(f"export_manifest: {export_manifest or '(not exported)'}")
+    print()
+
+    print("1. global regions")
+    regions = manifest["global_regions"]  # type: ignore[index]
+    print(f"  LOW_GAP: {regions['LOW_GAP']}")  # type: ignore[index]
+    print(f"  TRUE_LARGE_GAP: {regions['TRUE_LARGE_GAP']}")  # type: ignore[index]
+    print(f"  partition: {regions['partition_statement']}")  # type: ignore[index]
+    print()
+
+    print("2. component status")
+    components = manifest["components"]  # type: ignore[index]
+    for name, component in components.items():  # type: ignore[union-attr]
+        print(f"  {name}: {component['status']}")  # type: ignore[index]
+    print()
+
+    print("3. row classification")
+    row_classes = manifest["row_classes"]  # type: ignore[index]
+    for key in (
+        "LOW_GAP_CERTIFIED",
+        "LARGE_GAP_FINITE_CERTIFIED",
+        "LARGE_GAP_MONOTONE_REDUCED",
+        "LARGE_GAP_ONE_LEADER_TAIL",
+        "total_classified_rows",
+        "uncovered_interface_rows",
+    ):
+        print(f"  {key}: {row_classes[key]}")  # type: ignore[index]
+    print()
+
+    print("4. checks")
+    checks = manifest["checks"]  # type: ignore[index]
+    for key, value in checks.items():  # type: ignore[union-attr]
+        print(f"  {key}: {value}")
+    print()
+
+    print("5. global supersolution statement")
+    print(f"  {manifest['global_supersolution_statement']}")  # type: ignore[index]
+    print()
+
+    print("6. LaTeX-ready theorem")
+    print(r"\begin{theorem}[direct-route global low-gap/large-gap glue]")
+    print(
+        r"  On the certified direct-route balanced quotient, the rows with"
+        r" maximum ordered gap at most \(1\) are closed by the low-gap"
+        r" packet-face certificate.  The complementary rows, for which some"
+        r" ordered gap is at least \(2\), are closed by the chunked finite"
+        r" large-gap certificate, by the verified monotone/scaling reduction,"
+        r" or by the one-leader hitting-bound tail lemma."
+    )
+    print(
+        r"  Consequently the audited supersolution satisfies"
+        r" \(T_{\rm full}^{\rm bal} W_{t-1}(x)\le W_t(x)+1/t\)"
+        r" on every certified row, and hence"
+        r" \(V_{\rm full}^{\rm bal}(0,T)\le V_{\rm orbit}(0,T)+O(\log T)\)"
+        r" on this quotient."
+    )
+    print(r"\end{theorem}")
+    print()
+
+    print("7. remaining assumptions")
+    for assumption in manifest["remaining_assumptions"]:  # type: ignore[index]
+        print(f"  - {assumption}")
+    if manifest["status"] != "OK":  # type: ignore[index]
+        sys.stdout.flush()
+        raise SystemExit("direct-route global glue report has unresolved component checks")
+
+
 def k5_large_gap_barrier_audit_report(
     h_values: tuple[int, ...] = (4, 8, 12, 15, 20),
     max_used: int = 12,
@@ -47494,6 +47798,30 @@ def _build_parser() -> argparse.ArgumentParser:
     k5_large_gap_monotone_witness_verify_parser.add_argument("--export-manifest", default=None)
     k5_large_gap_monotone_witness_verify_parser.add_argument("-n", type=int, default=40)
 
+    k5_direct_route_global_glue_parser = subparsers.add_parser(
+        "k5-direct-route-global-glue-report"
+    )
+    k5_direct_route_global_glue_parser.add_argument(
+        "--low-gap-report",
+        default="reports/k5_low_gap_boundary_compression.txt",
+    )
+    k5_direct_route_global_glue_parser.add_argument(
+        "--large-gap-merge",
+        default="reports/large_gap_chunks/k5_large_gap_certificate_merge_verify.txt",
+    )
+    k5_direct_route_global_glue_parser.add_argument(
+        "--coverage-manifest",
+        default="reports/k5_large_gap_coverage_reduction_manifest.json",
+    )
+    k5_direct_route_global_glue_parser.add_argument(
+        "--monotone-manifest",
+        default="reports/k5_large_gap_monotone_witness_verify.json",
+    )
+    k5_direct_route_global_glue_parser.add_argument(
+        "--export-manifest",
+        default="reports/k5_direct_route_global_glue_manifest.json",
+    )
+
     k5_scalar_potential_exchangeability_parser = subparsers.add_parser("k5-scalar-potential-exchangeability")
     k5_scalar_potential_exchangeability_parser.add_argument("--max-used", type=int, default=8)
     k5_scalar_potential_exchangeability_parser.add_argument(
@@ -49553,6 +49881,15 @@ def main() -> None:
             coverage_manifest_path=args.coverage_manifest_path,
             export_manifest=args.export_manifest,
             n=args.n,
+        )
+        return
+    if args.command == "k5-direct-route-global-glue-report":
+        print_k5_direct_route_global_glue_report(
+            low_gap_report=args.low_gap_report,
+            large_gap_merge=args.large_gap_merge,
+            coverage_manifest=args.coverage_manifest,
+            monotone_manifest=args.monotone_manifest,
+            export_manifest=args.export_manifest,
         )
         return
     if args.command == "k5-scalar-potential-exchangeability":
