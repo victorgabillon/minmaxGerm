@@ -27585,6 +27585,374 @@ def print_k5_orbit_to_fixed_chase_bridge_report(
         raise SystemExit(f"orbit-to-fixed-Chase bridge has {unknown_count} UNKNOWN rows")
 
 
+def _support_marginals(
+    support: tuple[tuple[Fraction, tuple[int, ...]], ...],
+    k: int = 5,
+) -> tuple[Fraction, ...]:
+    return tuple(sum(probability * action[index] for probability, action in support) for index in range(k))
+
+
+def _support_expected_next_value(
+    state: tuple[int, ...],
+    continuation: Mapping[tuple[int, ...], float],
+    support: tuple[tuple[Fraction, tuple[int, ...]], ...],
+) -> float:
+    total = 0.0
+    for probability, offset, successor in _balanced_mdp_successor_terms(state, support):
+        total += float(probability) * (float(offset) + continuation[successor])
+    return total
+
+
+def _symmetrize_support_by_permutations(
+    support: tuple[tuple[Fraction, tuple[int, ...]], ...],
+    k: int = 5,
+) -> tuple[tuple[Fraction, tuple[int, ...]], ...]:
+    totals: dict[tuple[int, ...], Fraction] = defaultdict(Fraction)
+    permutation_list = tuple(permutations(range(k)))
+    for probability, action in support:
+        for permutation in permutation_list:
+            moved = tuple(action[index] for index in permutation)
+            totals[moved] += probability / len(permutation_list)
+    return _normalize_fraction_support(tuple((probability, action) for action, probability in totals.items() if probability))
+
+
+def _support_manifest_key(
+    support: tuple[tuple[Fraction, tuple[int, ...]], ...],
+) -> tuple[tuple[str, int, int], ...]:
+    return tuple(
+        (_bits_text(action), probability.numerator, probability.denominator)
+        for probability, action in _normalize_fraction_support(support)
+    )
+
+
+def _k5_unrestricted_symmetrization_test_actions(
+    action_set: str,
+) -> tuple[tuple[str, tuple[tuple[Fraction, tuple[int, ...]], ...]], ...]:
+    actions: list[tuple[str, tuple[tuple[Fraction, tuple[int, ...]], ...]]] = []
+    gain_vectors = tuple(product((0, 1), repeat=5))
+    if action_set in {"pure", "representative", "all"}:
+        for action in gain_vectors:
+            actions.append((f"pure:{_bits_text(action)}", ((Fraction(1), action),)))
+    if action_set in {"representative", "all"}:
+        seen_pairs: set[tuple[str, str]] = set()
+        for action in gain_vectors:
+            other = complement(action)
+            pair_key = tuple(sorted((_bits_text(action), _bits_text(other))))
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+            support = _normalize_fraction_support(((Fraction(1, 2), action), (Fraction(1, 2), other)))
+            actions.append((f"complement-pair:{pair_key[0]}:{pair_key[1]}", support))
+    if action_set in {"balanced-vertices", "representative", "all"}:
+        for index, vertex in enumerate(k5_balanced_action_vertices(), start=1):
+            actions.append((f"balanced-vertex:{index}", vertex.support))
+    if action_set == "all":
+        half = Fraction(1, 2)
+        quarter = Fraction(1, 4)
+        for first, second in combinations(gain_vectors, 2):
+            actions.append(
+                (
+                    f"two-point-half:{_bits_text(first)}:{_bits_text(second)}",
+                    _normalize_fraction_support(((half, first), (half, second))),
+                )
+            )
+        templates = (
+            ((quarter, gain_vectors[0]), (quarter, gain_vectors[-1]), (half, (1, 0, 1, 0, 0))),
+            ((quarter, (1, 1, 0, 0, 0)), (quarter, (0, 0, 1, 1, 1)), (half, (1, 0, 0, 1, 0))),
+        )
+        for index, support in enumerate(templates, start=1):
+            actions.append((f"sample-three-point:{index}", _normalize_fraction_support(support)))
+
+    deduped: dict[tuple[tuple[str, int, int], ...], tuple[str, tuple[tuple[Fraction, tuple[int, ...]], ...]]] = {}
+    for name, support in actions:
+        deduped.setdefault(_support_manifest_key(support), (name, _normalize_fraction_support(support)))
+    return tuple(deduped[key] for key in sorted(deduped))
+
+
+def _balanced_to_unrestricted_symmetrization_manifest(
+    h_values: tuple[int, ...],
+    max_used: int,
+    action_set: str,
+    tolerance: float,
+    sample_limit: int,
+) -> dict[str, object]:
+    if not h_values:
+        raise ValueError("h_values must be nonempty")
+    if action_set not in {"pure", "balanced-vertices", "representative", "all"}:
+        raise ValueError("--action-set must be one of: pure, balanced-vertices, representative, all")
+    depth = max(h_values) + max_used
+    solution = _k5_balanced_mdp_fixed_chase_solution(depth)
+    states = _k5_balanced_chase_greedy_defect_states(max_used)
+    actions = _k5_unrestricted_symmetrization_test_actions(action_set)
+    checked_actions: list[dict[str, object]] = []
+    for name, support in actions:
+        sym_support = _symmetrize_support_by_permutations(support)
+        checked_actions.append(
+            {
+                "name": name,
+                "support": _format_balanced_support(support),
+                "marginals": [_fraction_text(value) for value in _support_marginals(support)],
+                "symmetrized_support": _format_balanced_support(sym_support),
+                "symmetrized_marginals": [_fraction_text(value) for value in _support_marginals(sym_support)],
+            }
+        )
+
+    max_symmetry_error = 0.0
+    max_marginal_inequality_violation = 0.0
+    max_payoff_violation = 0.0
+    symmetry_failure_rows = 0
+    marginal_violation_rows = 0
+    payoff_violation_rows = 0
+    violations: list[dict[str, object]] = []
+    samples: list[dict[str, object]] = []
+    checked_rows = 0
+    for horizon in h_values:
+        if horizon <= 0:
+            raise ValueError(f"h_values must be positive for Bellman checks, got {horizon}")
+        continuation = solution.values[horizon - 1]
+        for state in states:
+            for action_name, support in actions:
+                sym_support = _symmetrize_support_by_permutations(support)
+                expected = _support_expected_next_value(state, continuation, support)
+                sym_expected = _support_expected_next_value(state, continuation, sym_support)
+                marginals = _support_marginals(support)
+                sym_marginals = _support_marginals(sym_support)
+                max_marginal = max(marginals, default=Fraction(0))
+                max_sym_marginal = max(sym_marginals, default=Fraction(0))
+                payoff = expected - float(max_marginal)
+                sym_payoff = sym_expected - float(max_sym_marginal)
+                symmetry_error = abs(expected - sym_expected)
+                marginal_violation = max(0.0, float(max_sym_marginal - max_marginal))
+                payoff_violation = max(0.0, payoff - sym_payoff)
+                max_symmetry_error = max(max_symmetry_error, symmetry_error)
+                max_marginal_inequality_violation = max(max_marginal_inequality_violation, marginal_violation)
+                max_payoff_violation = max(max_payoff_violation, payoff_violation)
+                checked_rows += 1
+                row = {
+                    "h": horizon,
+                    "state": list(state),
+                    "action": action_name,
+                    "expected_q_W": expected,
+                    "expected_sym_q_W": sym_expected,
+                    "symmetry_error": symmetry_error,
+                    "max_marginal_q": _fraction_text(max_marginal),
+                    "max_marginal_sym_q": _fraction_text(max_sym_marginal),
+                    "marginal_inequality_violation": marginal_violation,
+                    "payoff_q": payoff,
+                    "payoff_sym_q": sym_payoff,
+                    "payoff_violation": payoff_violation,
+                }
+                row_has_violation = False
+                if symmetry_error > tolerance:
+                    symmetry_failure_rows += 1
+                    row_has_violation = True
+                if marginal_violation > tolerance:
+                    marginal_violation_rows += 1
+                    row_has_violation = True
+                if payoff_violation > tolerance:
+                    payoff_violation_rows += 1
+                    row_has_violation = True
+                if row_has_violation:
+                    violations.append(row)
+                elif len(samples) < sample_limit:
+                    samples.append(row)
+
+    sign_state = (0, 0, 0, 0, 0)
+    sign_support = ((Fraction(1), (1, 0, 0, 0, 0)),)
+    sign_continuation = solution.values[0]
+    sign_expected = _support_expected_next_value(sign_state, sign_continuation, sign_support)
+    sign_marginals = _support_marginals(sign_support)
+    sign_payoff_max = sign_expected - float(max(sign_marginals))
+    sign_payoff_min = sign_expected - float(min(sign_marginals))
+    unknown_rows = len(violations)
+    return {
+        "format": "k5-balanced-to-unrestricted-symmetrization-manifest-v1",
+        "status": "OK" if unknown_rows == 0 else "CHECK",
+        "h_values": list(h_values),
+        "max_used": max_used,
+        "depth": depth,
+        "action_set": action_set,
+        "operator_definitions": {
+            "unrestricted_mixed_action_bellman_operator": (
+                "T_full W(x) = sup_q { E_q[min(x+g)+W(can(x+g))] - max_i E_q[g_i] }, "
+                "where q ranges over probability distributions on {0,1}^5."
+            ),
+            "balanced_bellman_operator": (
+                "T_full^bal W(x) is the same supremum restricted to mixed actions whose five "
+                "coordinate marginals are equal; the code enumerates its finite balanced vertices."
+            ),
+            "sign_convention": (
+                "The learner response term is -max_i marginal_i. This matches "
+                "lp_game.solve_adversary_dual and dp_policy.evaluate_balanced_policy."
+            ),
+        },
+        "response_term_sign_check": {
+            "verified_term": "-max_i E_q[g_i]",
+            "not_min_i": True,
+            "code_locations": [
+                "src/expert_game_lab/lp_game.py:135",
+                "src/expert_game_lab/dp_policy.py:46",
+            ],
+            "sample_action": _format_balanced_support(sign_support),
+            "sample_marginals": [_fraction_text(value) for value in sign_marginals],
+            "expected_next_value": sign_expected,
+            "payoff_with_minus_max": sign_payoff_max,
+            "payoff_with_minus_min": sign_payoff_min,
+        },
+        "potential_used_for_finite_audit": {
+            "name": "fixed Chase canonical value table",
+            "reason": (
+                "a concrete permutation-invariant canonical continuation table used only "
+                "to sign-check the implementation over the certified finite quotient"
+            ),
+        },
+        "checked_state_count": len(states),
+        "checked_states": [list(state) for state in states],
+        "checked_action_count": len(actions),
+        "checked_actions": checked_actions,
+        "checked_rows": checked_rows,
+        "max_symmetry_error": max_symmetry_error,
+        "max_marginal_inequality_violation": max_marginal_inequality_violation,
+        "max_payoff_violation": max_payoff_violation,
+        "symmetry_failure_rows": symmetry_failure_rows,
+        "marginal_violation_rows": marginal_violation_rows,
+        "payoff_violation_rows": payoff_violation_rows,
+        "unknown_rows": unknown_rows,
+        "violations": violations,
+        "sample_verified_rows": samples,
+    }
+
+
+def print_k5_balanced_to_unrestricted_symmetrization_report(
+    h_values: tuple[int, ...] = (4, 8, 12),
+    max_used: int = 8,
+    action_set: str = "representative",
+    export_manifest: str | None = "reports/k5_balanced_to_unrestricted_symmetrization_manifest.json",
+    n: int = 20,
+    tolerance: float = 1e-10,
+) -> None:
+    manifest = _balanced_to_unrestricted_symmetrization_manifest(
+        h_values=h_values,
+        max_used=max_used,
+        action_set=action_set,
+        tolerance=tolerance,
+        sample_limit=n,
+    )
+    if export_manifest:
+        parent = os.path.dirname(export_manifest)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(export_manifest, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+    unknown_rows = int(manifest.get("unknown_rows", 0) or 0)
+
+    print("k5 balanced-to-unrestricted symmetrization report")
+    print()
+    print(f"h_values: {h_values}")
+    print(f"max_used: {max_used}")
+    print(f"action_set: {action_set}")
+    print(f"checked_states: {manifest['checked_state_count']}")  # type: ignore[index]
+    print(f"checked_actions: {manifest['checked_action_count']}")  # type: ignore[index]
+    print(f"checked_rows: {manifest['checked_rows']}")  # type: ignore[index]
+    print(f"export_manifest: {export_manifest or '(not exported)'}")
+    print()
+
+    operators = manifest["operator_definitions"]  # type: ignore[index]
+    print("1. Bellman operators")
+    print(f"  unrestricted: {operators['unrestricted_mixed_action_bellman_operator']}")  # type: ignore[index]
+    print(f"  balanced: {operators['balanced_bellman_operator']}")  # type: ignore[index]
+    print()
+
+    sign_check = manifest["response_term_sign_check"]  # type: ignore[index]
+    print("2. learner-response sign check")
+    print(f"  verified term: {sign_check['verified_term']}")  # type: ignore[index]
+    print(f"  not -min_i: {sign_check['not_min_i']}")  # type: ignore[index]
+    print(f"  sample action: {sign_check['sample_action']}")  # type: ignore[index]
+    print(f"  payoff with -max: {sign_check['payoff_with_minus_max']:.12g}")  # type: ignore[index]
+    print(f"  payoff with -min: {sign_check['payoff_with_minus_min']:.12g}")  # type: ignore[index]
+    print()
+
+    print("3. finite symmetrization audit")
+    print(f"  max |E_q W - E_sym(q) W|: {manifest['max_symmetry_error']:.12g}")  # type: ignore[index]
+    print(f"  max positive [max marginal(sym(q)) - max marginal(q)]: {manifest['max_marginal_inequality_violation']:.12g}")  # type: ignore[index]
+    print(f"  max positive [payoff(q) - payoff(sym(q))]: {manifest['max_payoff_violation']:.12g}")  # type: ignore[index]
+    print(f"  symmetry equality failures: {manifest['symmetry_failure_rows']}")  # type: ignore[index]
+    print(f"  marginal inequality violations: {manifest['marginal_violation_rows']}")  # type: ignore[index]
+    print(f"  payoff dominance violations: {manifest['payoff_violation_rows']}")  # type: ignore[index]
+    print(f"  unknown_rows: {unknown_rows}")
+    print()
+
+    print("4. representative checked actions")
+    for action in manifest["checked_actions"][:n]:  # type: ignore[index]
+        print(
+            f"  {action['name']}: support={action['support']}"
+            f" marginals={action['marginals']}"
+            f" sym_marginals={action['symmetrized_marginals']}"
+        )
+    if len(manifest["checked_actions"]) > n:  # type: ignore[arg-type,index]
+        print(f"  ... omitted {len(manifest['checked_actions']) - n} actions; see manifest.")  # type: ignore[arg-type]
+    print()
+
+    print("5. sample verified rows")
+    samples = manifest["sample_verified_rows"]  # type: ignore[index]
+    for row in samples[:n]:  # type: ignore[index]
+        print(
+            f"  h={row['h']} state={row['state']} action={row['action']}"
+            f" sym_err={row['symmetry_error']:.3g}"
+            f" marginal_violation={row['marginal_inequality_violation']:.3g}"
+            f" payoff_violation={row['payoff_violation']:.3g}"
+        )
+    if not samples:
+        print("  none")
+    print()
+
+    print("6. violating rows")
+    violations = manifest["violations"]  # type: ignore[index]
+    if not violations:
+        print("  none")
+    for row in violations[:n]:  # type: ignore[index]
+        print(
+            f"  h={row['h']} state={row['state']} action={row['action']}"
+            f" sym_err={row['symmetry_error']:.12g}"
+            f" marginal_violation={row['marginal_inequality_violation']:.12g}"
+            f" payoff_violation={row['payoff_violation']:.12g}"
+        )
+    if len(violations) > n:  # type: ignore[arg-type]
+        print(f"  ... omitted {len(violations) - n} violating rows; see manifest.")  # type: ignore[arg-type]
+    print()
+
+    print("7. LaTeX-ready lemma")
+    print(r"\begin{lemma}[balanced symmetrization reduction]")
+    print(r"Let \(W\) be invariant under coordinate permutations after canonicalization.")
+    print(r"Then the unrestricted adversary Bellman operator equals the balanced one:")
+    print(r"\[")
+    print(r"T_{\rm full}W = T_{\rm full}^{\rm bal}W.")
+    print(r"\]")
+    print(r"\end{lemma}")
+    print()
+    print("8. human-readable theorem")
+    if unknown_rows == 0:
+        print(
+            "For any unrestricted mixed action q on {0,1}^5, averaging q over all coordinate "
+            "permutations preserves the canonical continuation term and replaces the marginal "
+            "vector by its coordinate average. Since this average is at most the original maximum "
+            "marginal, the symmetrized balanced action has payoff at least that of q. Hence, for "
+            "symmetric/canonical W, T_full W = T_full^bal W."
+        )
+    else:
+        print(
+            "The finite audit does not certify the proposed theorem under the current canonical "
+            "Bellman convention. At fixed canonical states, action-only permutation symmetrization "
+            "failed the requested equality E_q W = E_sym(q) W on the rows listed above. The "
+            "marginal and payoff checks are reported separately to identify whether a weaker "
+            "dominance bridge may still be available."
+        )
+    if unknown_rows:
+        sys.stdout.flush()
+        raise SystemExit(f"balanced-to-unrestricted symmetrization has {unknown_rows} violating rows")
+
+
 def k5_large_gap_barrier_audit_report(
     h_values: tuple[int, ...] = (4, 8, 12, 15, 20),
     max_used: int = 12,
@@ -48119,6 +48487,28 @@ def _build_parser() -> argparse.ArgumentParser:
     k5_orbit_to_fixed_chase_bridge_parser.add_argument("--tolerance", type=float, default=1e-10)
     k5_orbit_to_fixed_chase_bridge_parser.add_argument("-n", type=int, default=40)
 
+    k5_balanced_to_unrestricted_symmetrization_parser = subparsers.add_parser(
+        "k5-balanced-to-unrestricted-symmetrization-report"
+    )
+    k5_balanced_to_unrestricted_symmetrization_parser.add_argument(
+        "--h-values",
+        default="4,8,12",
+        help="comma-separated horizons, e.g. 4,8,12",
+    )
+    k5_balanced_to_unrestricted_symmetrization_parser.add_argument("--max-used", type=int, default=8)
+    k5_balanced_to_unrestricted_symmetrization_parser.add_argument(
+        "--action-set",
+        choices=("pure", "balanced-vertices", "representative", "all"),
+        default="representative",
+        help="unrestricted mixed actions to audit before permutation symmetrization",
+    )
+    k5_balanced_to_unrestricted_symmetrization_parser.add_argument(
+        "--export-manifest",
+        default="reports/k5_balanced_to_unrestricted_symmetrization_manifest.json",
+    )
+    k5_balanced_to_unrestricted_symmetrization_parser.add_argument("--tolerance", type=float, default=1e-10)
+    k5_balanced_to_unrestricted_symmetrization_parser.add_argument("-n", type=int, default=20)
+
     k5_scalar_potential_exchangeability_parser = subparsers.add_parser("k5-scalar-potential-exchangeability")
     k5_scalar_potential_exchangeability_parser.add_argument("--max-used", type=int, default=8)
     k5_scalar_potential_exchangeability_parser.add_argument(
@@ -50195,6 +50585,16 @@ def main() -> None:
             max_used=args.max_used,
             harmonic_constant=_fraction_from_json(args.harmonic_constant),
             correction_constant=_fraction_from_json(args.correction_constant),
+            export_manifest=args.export_manifest,
+            n=args.n,
+            tolerance=args.tolerance,
+        )
+        return
+    if args.command == "k5-balanced-to-unrestricted-symmetrization-report":
+        print_k5_balanced_to_unrestricted_symmetrization_report(
+            h_values=_parse_T_values(args.h_values),
+            max_used=args.max_used,
+            action_set=args.action_set,
             export_manifest=args.export_manifest,
             n=args.n,
             tolerance=args.tolerance,
