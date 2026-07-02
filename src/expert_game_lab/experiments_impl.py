@@ -27306,6 +27306,285 @@ def print_k5_direct_route_global_glue_report(
         raise SystemExit("direct-route global glue report has unresolved component checks")
 
 
+def _orbit_bridge_family_label(state: tuple[int, ...]) -> str:
+    gaps = _gap_vector(state)
+    for gap_index, gap_value in enumerate(gaps):
+        if gap_value >= 2:
+            return _large_gap_influence_family(state, gap_index)
+    return "LOW_GAP"
+
+
+def _orbit_bridge_regime_label(state: tuple[int, ...]) -> str:
+    gaps = _gap_vector(state)
+    return "LOW_GAP" if max(gaps, default=0) <= 1 else "TRUE_LARGE_GAP"
+
+
+def _orbit_bridge_transition_key(
+    state: tuple[int, ...],
+    vertex: BalancedActionVertex,
+) -> tuple[tuple[tuple[int, ...], int, str], ...]:
+    return tuple(
+        (successor, offset, _fraction_text(probability))
+        for probability, offset, successor in _balanced_mdp_successor_terms(state, vertex.support)
+    )
+
+
+def _orbit_to_fixed_chase_bridge_manifest(
+    h_values: tuple[int, ...],
+    max_used: int,
+    harmonic_constant: Fraction,
+    correction_constant: Fraction,
+    tolerance: float,
+) -> dict[str, object]:
+    if not h_values:
+        raise ValueError("h_values must be nonempty")
+    depth = max(h_values) + max_used
+    orbit_solution = _k5_balanced_mdp_orbit_solution(depth)
+    fixed_solution = _k5_balanced_mdp_fixed_chase_solution(depth)
+    orbit_vertices = _k5_chase_orbit_vertices()
+    fixed_chase = _k5_chase_balanced_vertex()
+    comb_vertex = _k5_comb_balanced_vertex()
+    if fixed_chase is None:
+        raise RuntimeError("Chase is not present in the balanced vertex enumeration")
+    states = _k5_balanced_chase_greedy_defect_states(max_used)
+    rows: list[dict[str, object]] = []
+    counts: dict[str, int] = defaultdict(int)
+    counts_by_regime: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    counts_by_family: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    counts_by_packet: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    max_value_gap = 0.0
+    max_h_scaled_gap = 0.0
+    for horizon in h_values:
+        for state in states:
+            orbit_vertex = orbit_solution.policies[horizon][state]
+            fixed_vertex = fixed_solution.policies[horizon][state]
+            value_gap = max(0.0, orbit_solution.values[horizon][state] - fixed_solution.values[horizon][state])
+            max_value_gap = max(max_value_gap, value_gap)
+            max_h_scaled_gap = max(max_h_scaled_gap, horizon * value_gap)
+            orbit_support_text = _format_balanced_support(orbit_vertex.support)
+            fixed_support_text = _format_balanced_support(fixed_chase.support)
+            literal_support_same = orbit_support_text == fixed_support_text
+            same_orbit_action = orbit_vertex.canonical_key == fixed_chase.canonical_key
+            same_transition = _orbit_bridge_transition_key(state, orbit_vertex) == _orbit_bridge_transition_key(state, fixed_vertex)
+            if same_orbit_action:
+                row_class = "EXACT_SYMMETRY_COMPLEMENT_EQUIVALENCE"
+                reason = "orbit optimizer chooses the fixed Chase/Comb complement-pair symmetry class"
+            elif same_transition or value_gap <= tolerance:
+                row_class = "FINITE_QUOTIENT_EQUIVALENCE"
+                reason = "different representative has the same audited finite-quotient value/transition effect"
+            elif value_gap <= float(correction_constant) + tolerance:
+                row_class = "BOUNDED_CORRECTION_ABSORBED_BY_A"
+                reason = f"value gap {value_gap:.12g} is within correction constant {correction_constant}"
+            elif horizon * value_gap <= float(harmonic_constant) + tolerance:
+                row_class = "HARMONIC_O_LOG_T_LOSS"
+                reason = f"h*value gap {horizon * value_gap:.12g} is within harmonic constant {harmonic_constant}"
+            else:
+                row_class = "UNKNOWN"
+                reason = "orbit action is not equivalent to fixed Chase and exceeds correction/harmonic bounds"
+            regime = _orbit_bridge_regime_label(state)
+            family = _orbit_bridge_family_label(state)
+            packet = str(packet_type(state))
+            counts[row_class] += 1
+            counts_by_regime[regime][row_class] += 1
+            counts_by_family[family][row_class] += 1
+            counts_by_packet[packet][row_class] += 1
+            if not literal_support_same or value_gap > tolerance:
+                rows.append(
+                    {
+                        "h": horizon,
+                        "state": list(state),
+                        "packet_type": list(packet_type(state)),
+                        "ordered_gaps": list(_gap_vector(state)),
+                        "regime": regime,
+                        "family": family,
+                        "class": row_class,
+                        "reason": reason,
+                        "value_gap_orbit_minus_fixed_chase": value_gap,
+                        "h_scaled_value_gap": horizon * value_gap,
+                        "orbit_action_class": _balanced_vertex_class_index(orbit_vertex),
+                        "fixed_chase_action_class": _balanced_vertex_class_index(fixed_chase),
+                        "orbit_support": orbit_support_text,
+                        "fixed_chase_support": fixed_support_text,
+                        "literal_support_same": literal_support_same,
+                        "same_symmetry_complement_class": same_orbit_action,
+                        "same_transition_distribution": same_transition,
+                    }
+                )
+    unknown_count = counts.get("UNKNOWN", 0)
+    return {
+        "format": "k5-orbit-to-fixed-chase-bridge-manifest-v1",
+        "status": "OK" if unknown_count == 0 else "CHECK",
+        "h_values": list(h_values),
+        "max_used": max_used,
+        "depth": depth,
+        "orbit_policy_class": {
+            "name": "V_orbit",
+            "definition": (
+                "finite-horizon balanced MDP restricted to the Chase/Comb orbit: "
+                "all complement-pair balanced vertices 1/2*a + 1/2*(1-a) with |a| in {2,3}"
+            ),
+            "vertex_count": len(orbit_vertices),
+            "vertices": [
+                {
+                    "class": _balanced_vertex_class_index(vertex),
+                    "support": _format_balanced_support(vertex.support),
+                }
+                for vertex in orbit_vertices
+            ],
+        },
+        "fixed_chase_policy": {
+            "name": "fixed Chase/Comb complement-pair",
+            "definition": (
+                "the fixed Chase balanced vertex with support 1/2*10100 + 1/2*01011; "
+                "the Comb representative 1/2*10101 + 1/2*01010 is in the same symmetry/complement orbit"
+            ),
+            "support": _format_balanced_support(fixed_chase.support),
+            "class": _balanced_vertex_class_index(fixed_chase),
+            "comb_support": _format_balanced_support(comb_vertex.support) if comb_vertex is not None else None,
+            "comb_class": _balanced_vertex_class_index(comb_vertex) if comb_vertex is not None else None,
+        },
+        "classification_counts": dict(sorted(counts.items())),
+        "classification_counts_by_regime": {
+            key: dict(sorted(value.items()))
+            for key, value in sorted(counts_by_regime.items())
+        },
+        "classification_counts_by_family": {
+            key: dict(sorted(value.items()))
+            for key, value in sorted(counts_by_family.items())
+        },
+        "classification_counts_by_packet": {
+            key: dict(sorted(value.items()))
+            for key, value in sorted(counts_by_packet.items())
+        },
+        "difference_rows": rows,
+        "difference_row_count": len(rows),
+        "max_value_gap_orbit_minus_fixed_chase": max_value_gap,
+        "max_h_scaled_value_gap": max_h_scaled_gap,
+        "harmonic_constant": _fraction_text(harmonic_constant),
+        "correction_constant": _fraction_text(correction_constant),
+        "unknown": unknown_count,
+    }
+
+
+def print_k5_orbit_to_fixed_chase_bridge_report(
+    h_values: tuple[int, ...] = (4, 8, 12),
+    max_used: int = 8,
+    harmonic_constant: Fraction = Fraction(1),
+    correction_constant: Fraction = Fraction(0),
+    export_manifest: str | None = "reports/k5_orbit_to_fixed_chase_bridge_manifest.json",
+    n: int = 40,
+    tolerance: float = 1e-10,
+) -> None:
+    manifest = _orbit_to_fixed_chase_bridge_manifest(
+        h_values=h_values,
+        max_used=max_used,
+        harmonic_constant=harmonic_constant,
+        correction_constant=correction_constant,
+        tolerance=tolerance,
+    )
+    if export_manifest:
+        parent = os.path.dirname(export_manifest)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(export_manifest, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+    unknown_count = int(manifest.get("unknown", 0) or 0)
+    print("k5 orbit-to-fixed-Chase bridge report")
+    print()
+    print(f"h_values: {h_values}")
+    print(f"max_used: {max_used}")
+    print(f"harmonic_constant: {_fraction_text(harmonic_constant)}")
+    print(f"correction_constant: {_fraction_text(correction_constant)}")
+    print(f"export_manifest: {export_manifest or '(not exported)'}")
+    print()
+
+    print("1. orbit policy class used by V_orbit")
+    orbit_policy = manifest["orbit_policy_class"]  # type: ignore[index]
+    print(f"  {orbit_policy['definition']}")  # type: ignore[index]
+    print(f"  vertex_count: {orbit_policy['vertex_count']}")  # type: ignore[index]
+    for vertex in orbit_policy["vertices"][:n]:  # type: ignore[index]
+        print(f"  class={vertex['class']} support={vertex['support']}")
+    if len(orbit_policy["vertices"]) > n:  # type: ignore[arg-type,index]
+        print(f"  ... omitted {len(orbit_policy['vertices']) - n} orbit vertices; increase -n to print more.")  # type: ignore[arg-type]
+    print()
+
+    print("2. fixed Chase/Comb policy")
+    fixed_policy = manifest["fixed_chase_policy"]  # type: ignore[index]
+    print(f"  {fixed_policy['definition']}")  # type: ignore[index]
+    print(f"  fixed support: {fixed_policy['support']}")  # type: ignore[index]
+    print(f"  fixed class: {fixed_policy['class']}")  # type: ignore[index]
+    print(f"  Comb support: {fixed_policy['comb_support']}")  # type: ignore[index]
+    print(f"  Comb class: {fixed_policy['comb_class']}")  # type: ignore[index]
+    print()
+
+    print("3. classification counts")
+    counts = manifest["classification_counts"]  # type: ignore[index]
+    if isinstance(counts, dict):
+        for row_class, value in sorted(counts.items()):
+            print(f"  {row_class}: {value}")
+    print(f"  UNKNOWN: {unknown_count}")
+    print(f"  difference rows stored: {manifest['difference_row_count']}")  # type: ignore[index]
+    print(f"  max V_orbit - V_fixed_chase: {manifest['max_value_gap_orbit_minus_fixed_chase']:.12g}")  # type: ignore[index]
+    print(f"  max h*(V_orbit - V_fixed_chase): {manifest['max_h_scaled_value_gap']:.12g}")  # type: ignore[index]
+    print()
+
+    print("4. counts by regime")
+    by_regime = manifest["classification_counts_by_regime"]  # type: ignore[index]
+    if isinstance(by_regime, dict):
+        for regime, regime_counts in sorted(by_regime.items()):
+            pieces = " ".join(f"{row_class}={value}" for row_class, value in sorted(regime_counts.items()))
+            print(f"  {regime}: {pieces}")
+    print()
+
+    print("5. counts by family")
+    by_family = manifest["classification_counts_by_family"]  # type: ignore[index]
+    if isinstance(by_family, dict):
+        for family, family_counts in sorted(by_family.items()):
+            pieces = " ".join(f"{row_class}={value}" for row_class, value in sorted(family_counts.items()))
+            print(f"  {family}: {pieces}")
+    print()
+
+    print("6. orbit/fixed action differences")
+    difference_rows = manifest["difference_rows"]  # type: ignore[index]
+    if not difference_rows:
+        print("  none")
+    for row in difference_rows[:n]:  # type: ignore[index]
+        print(
+            f"  {row['class']} h={row['h']} state={row['state']}"
+            f" packet={row['packet_type']} family={row['family']}"
+            f" gap={row['value_gap_orbit_minus_fixed_chase']:.12g}"
+            f" orbit={row['orbit_support']}"
+        )
+    if len(difference_rows) > n:  # type: ignore[arg-type]
+        print(f"  ... omitted {len(difference_rows) - n} difference rows; see manifest.")  # type: ignore[arg-type]
+    print()
+
+    print("7. LaTeX-ready theorem")
+    print(r"\begin{theorem}[orbit-to-fixed-Chase bridge on the certified quotient]")
+    if unknown_count == 0:
+        print(
+            r"  On the audited finite direct-route quotient, every state/time row"
+            r" where the orbit-restricted optimizer differs from the fixed"
+            r" Chase/Comb complement-pair is accounted for by exact symmetry,"
+            r" finite quotient equivalence, a bounded correction, or a"
+            r" \(C/t\) harmonic loss.  Therefore"
+            r" \(V_{\rm orbit}(0,T)\le V_{\rm fixed\;Chase}(0,T)+O(\log T)\)"
+            r" on the certified quotient."
+        )
+    else:
+        print(
+            r"  The finite audit found orbit/fixed-Chase rows that are not yet"
+            r" classified by symmetry, quotient equivalence, bounded correction,"
+            r" or harmonic loss.  These rows are the remaining obstruction to"
+            r" \(V_{\rm orbit}\le V_{\rm fixed\;Chase}+O(\log T)\)."
+        )
+    print(r"\end{theorem}")
+    if unknown_count:
+        sys.stdout.flush()
+        raise SystemExit(f"orbit-to-fixed-Chase bridge has {unknown_count} UNKNOWN rows")
+
+
 def k5_large_gap_barrier_audit_report(
     h_values: tuple[int, ...] = (4, 8, 12, 15, 20),
     max_used: int = 12,
@@ -47822,6 +48101,24 @@ def _build_parser() -> argparse.ArgumentParser:
         default="reports/k5_direct_route_global_glue_manifest.json",
     )
 
+    k5_orbit_to_fixed_chase_bridge_parser = subparsers.add_parser(
+        "k5-orbit-to-fixed-chase-bridge-report"
+    )
+    k5_orbit_to_fixed_chase_bridge_parser.add_argument(
+        "--h-values",
+        default="4,8,12",
+        help="comma-separated horizons, e.g. 4,8,12",
+    )
+    k5_orbit_to_fixed_chase_bridge_parser.add_argument("--max-used", type=int, default=8)
+    k5_orbit_to_fixed_chase_bridge_parser.add_argument("--harmonic-constant", default="1")
+    k5_orbit_to_fixed_chase_bridge_parser.add_argument("--correction-constant", default="0")
+    k5_orbit_to_fixed_chase_bridge_parser.add_argument(
+        "--export-manifest",
+        default="reports/k5_orbit_to_fixed_chase_bridge_manifest.json",
+    )
+    k5_orbit_to_fixed_chase_bridge_parser.add_argument("--tolerance", type=float, default=1e-10)
+    k5_orbit_to_fixed_chase_bridge_parser.add_argument("-n", type=int, default=40)
+
     k5_scalar_potential_exchangeability_parser = subparsers.add_parser("k5-scalar-potential-exchangeability")
     k5_scalar_potential_exchangeability_parser.add_argument("--max-used", type=int, default=8)
     k5_scalar_potential_exchangeability_parser.add_argument(
@@ -49890,6 +50187,17 @@ def main() -> None:
             coverage_manifest=args.coverage_manifest,
             monotone_manifest=args.monotone_manifest,
             export_manifest=args.export_manifest,
+        )
+        return
+    if args.command == "k5-orbit-to-fixed-chase-bridge-report":
+        print_k5_orbit_to_fixed_chase_bridge_report(
+            h_values=_parse_T_values(args.h_values),
+            max_used=args.max_used,
+            harmonic_constant=_fraction_from_json(args.harmonic_constant),
+            correction_constant=_fraction_from_json(args.correction_constant),
+            export_manifest=args.export_manifest,
+            n=args.n,
+            tolerance=args.tolerance,
         )
         return
     if args.command == "k5-scalar-potential-exchangeability":
