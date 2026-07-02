@@ -26727,6 +26727,281 @@ def print_k5_large_gap_coverage_reduction_report(
         raise SystemExit(f"large-gap coverage reduction has {unknown_count} UNKNOWN rows")
 
 
+def _large_gap_manifest_int(value: object, default: int = 0) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith(">="):
+            text = text[2:].strip()
+        try:
+            return int(text)
+        except ValueError:
+            return default
+    return default
+
+
+def _large_gap_manifest_state(value: object) -> tuple[int, ...] | None:
+    if not isinstance(value, list):
+        return None
+    try:
+        return tuple(int(part) for part in value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _large_gap_certificate_constants_from_path(path: object) -> dict[str, Fraction]:
+    if not path:
+        return {}
+    try:
+        with open(str(path), encoding="utf-8") as handle:
+            certificate = json.load(handle)
+    except OSError:
+        return {}
+    barrier = certificate.get("barrier", {})
+    if not isinstance(barrier, dict):
+        return {}
+    constants = barrier.get("constants", {})
+    if not isinstance(constants, dict):
+        return {}
+    parsed: dict[str, Fraction] = {}
+    for family, value in constants.items():
+        try:
+            parsed[str(family)] = _fraction_from_json(str(value))
+        except ValueError:
+            continue
+    return parsed
+
+
+def _large_gap_monotone_witness_verification_manifest(
+    coverage_manifest_path: str,
+) -> dict[str, object]:
+    with open(coverage_manifest_path, encoding="utf-8") as handle:
+        coverage = json.load(handle)
+    if coverage.get("format") != "k5-large-gap-coverage-reduction-manifest-v1":
+        raise ValueError("unsupported coverage manifest format")
+    classifications = coverage.get("classifications", [])
+    if not isinstance(classifications, list):
+        raise ValueError("coverage manifest has no classifications list")
+    manifest_dir = os.path.dirname(coverage_manifest_path)
+    constant_cache: dict[str, dict[str, Fraction]] = {}
+    rows: list[dict[str, object]] = []
+    counts: dict[str, int] = defaultdict(int)
+    counts_by_family: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for index, item in enumerate(classifications):
+        if not isinstance(item, dict) or item.get("class") != "MONOTONE_REDUCED":
+            continue
+        witness = item.get("witness", {})
+        if not isinstance(witness, dict):
+            witness = {}
+        reduced_signature = witness.get("reduced_checked_signature", {})
+        if not isinstance(reduced_signature, dict):
+            reduced_signature = {}
+        family = str(item.get("family"))
+        horizon = _large_gap_manifest_int(item.get("h"))
+        original_state = _large_gap_manifest_state(item.get("state"))
+        reduced_state = _large_gap_manifest_state(witness.get("reduced_state"))
+        original_gap = _large_gap_manifest_int(item.get("gap_value"), default=-1)
+        reduced_gap = _large_gap_manifest_int(witness.get("reduced_gap"), default=-1)
+        if reduced_gap < 0:
+            reduced_gap = _large_gap_manifest_int(reduced_signature.get("worst_gap"), default=-1)
+        reduced_horizon = _large_gap_manifest_int(reduced_signature.get("h"), default=-1)
+        reduced_family = str(reduced_signature.get("family", ""))
+        same_horizon = reduced_horizon == horizon
+        same_family = reduced_family == family
+        valid_template_states = (
+            original_state is not None
+            and reduced_state is not None
+            and len(original_state) == len(reduced_state)
+            and original_state[0] >= reduced_state[0]
+        )
+        gap_order = original_gap >= reduced_gap >= 0
+        certificate_path = reduced_signature.get("certificate_path")
+        resolved_certificate_path = str(certificate_path or "")
+        if (
+            resolved_certificate_path
+            and not os.path.isabs(resolved_certificate_path)
+            and manifest_dir
+            and not os.path.exists(resolved_certificate_path)
+        ):
+            resolved_certificate_path = os.path.join(manifest_dir, resolved_certificate_path)
+        path_key = resolved_certificate_path
+        if path_key not in constant_cache:
+            constant_cache[path_key] = _large_gap_certificate_constants_from_path(resolved_certificate_path)
+        family_constant = constant_cache[path_key].get(family)
+        original_barrier: Fraction | None = None
+        reduced_barrier: Fraction | None = None
+        barrier_inequality_holds = False
+        if family_constant is not None and original_gap >= 0 and reduced_gap >= 0:
+            original_barrier = family_constant / Fraction((original_gap + 1) ** 2)
+            reduced_barrier = family_constant / Fraction((reduced_gap + 1) ** 2)
+            barrier_inequality_holds = original_barrier <= reduced_barrier
+        inequality_text = str(witness.get("inequality_used", ""))
+        one_leader_cited = family == "F1" and (
+            "one-leader" in inequality_text
+            or "hitting" in inequality_text
+            or "one-leader" in str(witness.get("reference", ""))
+            or "hitting" in str(witness.get("reference", ""))
+        )
+        if same_horizon and same_family and valid_template_states and original_state == reduced_state and original_gap == reduced_gap:
+            witness_class = "MONOTONE_REDUCED_EXACT"
+            reason = "original and reduced finite rows coincide exactly"
+        elif (
+            same_horizon
+            and same_family
+            and valid_template_states
+            and gap_order
+            and barrier_inequality_holds
+        ):
+            witness_class = "MONOTONE_REDUCED_BY_FAMILY_ORDER"
+            reason = "same family constant and ordered-gap scaling gives B_F/(r+1)^2 <= B_F/(R+1)^2"
+        elif one_leader_cited:
+            witness_class = "MONOTONE_REDUCED_BY_ONE_LEADER_BOUND"
+            reason = "witness cites the one-leader / hitting-bound inequality"
+        else:
+            witness_class = "UNKNOWN_MONOTONE_WITNESS"
+            reason = "could not verify same-horizon/family template reduction or cited one-leader bound"
+        counts[witness_class] += 1
+        counts_by_family[family][witness_class] += 1
+        rows.append(
+            {
+                "id": index,
+                "class": witness_class,
+                "reason": reason,
+                "h": horizon,
+                "family": family,
+                "original_template_state": list(original_state) if original_state is not None else item.get("state"),
+                "reduced_cutoff_state": list(reduced_state) if reduced_state is not None else witness.get("reduced_state"),
+                "original_gap": original_gap,
+                "reduced_gap": reduced_gap,
+                "same_horizon": same_horizon,
+                "same_family": same_family,
+                "valid_template_states": valid_template_states,
+                "gap_order": gap_order,
+                "barrier_constant": _fraction_text(family_constant) if family_constant is not None else None,
+                "original_barrier": _fraction_text(original_barrier) if original_barrier is not None else None,
+                "reduced_barrier": _fraction_text(reduced_barrier) if reduced_barrier is not None else None,
+                "barrier_inequality_holds": barrier_inequality_holds,
+                "reduced_checked_signature": reduced_signature,
+                "source_witness": witness,
+            }
+        )
+    return {
+        "format": "k5-large-gap-monotone-witness-verification-v1",
+        "coverage_manifest_path": coverage_manifest_path,
+        "h_values": coverage.get("h_values", []),
+        "families": coverage.get("families", []),
+        "max_used": coverage.get("max_used"),
+        "tail_test_max_gap": coverage.get("tail_test_max_gap"),
+        "monotone_rows": len(rows),
+        "classification_counts": dict(sorted(counts.items())),
+        "classification_counts_by_family": {
+            family: dict(sorted(family_counts.items()))
+            for family, family_counts in sorted(counts_by_family.items())
+        },
+        "rows": rows,
+    }
+
+
+def print_k5_large_gap_monotone_witness_verify_report(
+    coverage_manifest_path: str,
+    export_manifest: str | None = None,
+    n: int = 40,
+) -> None:
+    manifest = _large_gap_monotone_witness_verification_manifest(coverage_manifest_path)
+    if export_manifest:
+        parent = os.path.dirname(export_manifest)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(export_manifest, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+    counts = manifest["classification_counts"]  # type: ignore[index]
+    unknown_count = int(counts.get("UNKNOWN_MONOTONE_WITNESS", 0)) if isinstance(counts, dict) else 0
+    rows = manifest["rows"]  # type: ignore[index]
+    print("k5 large-gap monotone witness verifier")
+    print()
+    print(f"coverage_manifest_path: {coverage_manifest_path}")
+    print(f"export_manifest: {export_manifest or '(not exported)'}")
+    print(f"h_values: {tuple(manifest.get('h_values', []))}")
+    print(f"families: {tuple(manifest.get('families', []))}")
+    print(f"monotone rows: {manifest['monotone_rows']}")  # type: ignore[index]
+    print()
+
+    print("1. monotone witness classes")
+    if isinstance(counts, dict):
+        for row_class, value in sorted(counts.items()):
+            print(f"  {row_class}: {value}")
+    print()
+
+    print("2. counts by family")
+    by_family = manifest["classification_counts_by_family"]  # type: ignore[index]
+    if isinstance(by_family, dict):
+        for family, family_counts in sorted(by_family.items()):
+            pieces = " ".join(f"{row_class}={value}" for row_class, value in sorted(family_counts.items()))
+            print(f"  {family}: {pieces}")
+    print()
+
+    print("3. verified witnesses")
+    verified_rows = [
+        row for row in rows
+        if isinstance(row, dict) and row.get("class") != "UNKNOWN_MONOTONE_WITNESS"
+    ]
+    if not verified_rows:
+        print("  none")
+    for row in verified_rows[:n]:
+        print(
+            f"  {row['class']} h={row['h']} family={row['family']}"
+            f" r={row['original_gap']} -> R={row['reduced_gap']}"
+            f" state={row['original_template_state']} -> {row['reduced_cutoff_state']}"
+            f" barrier={row['original_barrier']} <= {row['reduced_barrier']}"
+        )
+    if len(verified_rows) > n:
+        print(f"  ... omitted {len(verified_rows) - n} verified witnesses; increase -n to print more.")
+    print()
+
+    print("4. unknown monotone witnesses")
+    unknown_rows = [
+        row for row in rows
+        if isinstance(row, dict) and row.get("class") == "UNKNOWN_MONOTONE_WITNESS"
+    ]
+    if not unknown_rows:
+        print("  none")
+    for row in unknown_rows[:n]:
+        print(
+            f"  UNKNOWN h={row['h']} family={row['family']}"
+            f" r={row['original_gap']} R={row['reduced_gap']}"
+            f" same_h={row['same_horizon']} same_family={row['same_family']}"
+            f" gap_order={row['gap_order']} barrier_ok={row['barrier_inequality_holds']}"
+            f" state={row['original_template_state']} reduced={row['reduced_cutoff_state']}"
+        )
+    if len(unknown_rows) > n:
+        print(f"  ... omitted {len(unknown_rows) - n} unknown witnesses; see exported manifest.")
+    print()
+
+    print("5. LaTeX-ready lemma")
+    print(r"\begin{lemma}[large-gap template monotonicity and scaling reduction]")
+    print(
+        r"  Let a large-gap template row have horizon \(h\), family \(F\),"
+        r" ordered gap \(r\), and cutoff representative gap \(R\le r\)."
+        r" If the representative has the same horizon and family and the"
+        r" family barrier is \(B_F/(g+1)^2\), then"
+        r" \(B_F/(r+1)^2 \le B_F/(R+1)^2\)."
+        r" Hence the original template row is dominated by the checked finite"
+        r" representative.  The exceptional one-leader tail rows are dominated"
+        r" by the cited one-leader hitting-bound inequality."
+    )
+    print(
+        rf"  This verifier leaves {unknown_count} monotone witnesses unresolved."
+    )
+    print(r"\end{lemma}")
+    if unknown_count:
+        sys.stdout.flush()
+        raise SystemExit(f"large-gap monotone witness verification has {unknown_count} UNKNOWN_MONOTONE_WITNESS rows")
+
+
 def k5_large_gap_barrier_audit_report(
     h_values: tuple[int, ...] = (4, 8, 12, 15, 20),
     max_used: int = 12,
@@ -47207,6 +47482,18 @@ def _build_parser() -> argparse.ArgumentParser:
     k5_large_gap_coverage_reduction_parser.add_argument("--tolerance", type=float, default=1e-10)
     k5_large_gap_coverage_reduction_parser.add_argument("-n", type=int, default=40)
 
+    k5_large_gap_monotone_witness_verify_parser = subparsers.add_parser(
+        "k5-large-gap-monotone-witness-verify-report"
+    )
+    k5_large_gap_monotone_witness_verify_parser.add_argument(
+        "--coverage-manifest-path",
+        "--manifest-path",
+        dest="coverage_manifest_path",
+        required=True,
+    )
+    k5_large_gap_monotone_witness_verify_parser.add_argument("--export-manifest", default=None)
+    k5_large_gap_monotone_witness_verify_parser.add_argument("-n", type=int, default=40)
+
     k5_scalar_potential_exchangeability_parser = subparsers.add_parser("k5-scalar-potential-exchangeability")
     k5_scalar_potential_exchangeability_parser.add_argument("--max-used", type=int, default=8)
     k5_scalar_potential_exchangeability_parser.add_argument(
@@ -49259,6 +49546,13 @@ def main() -> None:
             export_manifest=args.export_manifest,
             n=args.n,
             tolerance=args.tolerance,
+        )
+        return
+    if args.command == "k5-large-gap-monotone-witness-verify-report":
+        print_k5_large_gap_monotone_witness_verify_report(
+            coverage_manifest_path=args.coverage_manifest_path,
+            export_manifest=args.export_manifest,
+            n=args.n,
         )
         return
     if args.command == "k5-scalar-potential-exchangeability":
