@@ -27953,6 +27953,394 @@ def print_k5_balanced_to_unrestricted_symmetrization_report(
         raise SystemExit(f"balanced-to-unrestricted symmetrization has {unknown_rows} violating rows")
 
 
+def _direct_route_low_gap_correction_value(
+    state: tuple[int, ...],
+    theta_l: Fraction = Fraction(-1, 25),
+    theta_p: Fraction = Fraction(-1, 200),
+) -> float:
+    tied_leaders, num_packets = _low_gap_correction_features(state)
+    return float(theta_l * tied_leaders + theta_p * num_packets)
+
+
+def _direct_route_large_gap_barrier_proxy_value(
+    state: tuple[int, ...],
+    constants: Mapping[str, Fraction] | None = None,
+) -> float:
+    barrier_constants = constants or _default_large_gap_influence_safe_b()
+    total = 0.0
+    for gap_index, gap_value in enumerate(_gap_vector(state)):
+        if gap_value < 2:
+            continue
+        family = _large_gap_influence_family(state, gap_index)
+        constant = barrier_constants.get(family, Fraction(1))
+        total += float(constant) / float((gap_value + 1) ** 2)
+    return total
+
+
+def _direct_route_gap_audit_successor_reward(
+    state: tuple[int, ...],
+    action: tuple[int, ...],
+    continuation: Mapping[tuple[int, ...], float],
+    include_low_gap_a: bool,
+    include_large_gap_proxy: bool,
+    large_gap_constants: Mapping[str, Fraction],
+) -> float:
+    raw_successor = tuple(state[index] + action[index] for index in range(len(state)))
+    successor = canon(raw_successor)
+    value = float(min(raw_successor, default=0)) + float(continuation[successor])
+    if include_low_gap_a:
+        value += _direct_route_low_gap_correction_value(successor)
+    if include_large_gap_proxy:
+        value += _direct_route_large_gap_barrier_proxy_value(successor, large_gap_constants)
+    return value
+
+
+def _balanced_operator_for_rewards(
+    rewards_by_action: Mapping[tuple[int, ...], float],
+) -> tuple[float, BalancedActionVertex]:
+    best_value = float("-inf")
+    best_vertex: BalancedActionVertex | None = None
+    for vertex in k5_balanced_action_vertices():
+        total = 0.0
+        for probability, action in vertex.support:
+            total += float(probability) * rewards_by_action[action]
+        value = total - float(vertex.marginal)
+        if best_vertex is None or (value, -len(vertex.support), vertex.canonical_key) > (
+            best_value,
+            -len(best_vertex.support),
+            best_vertex.canonical_key,
+        ):
+            best_value = value
+            best_vertex = vertex
+    if best_vertex is None:
+        raise RuntimeError("balanced action vertex enumeration is empty")
+    return best_value, best_vertex
+
+
+def _gap_audit_state_regime(state: tuple[int, ...]) -> str:
+    gaps = _gap_vector(state)
+    if not gaps or max(gaps, default=0) <= 1:
+        return "LOW_GAP"
+    return "TRUE_LARGE_GAP"
+
+
+def _classify_unrestricted_balanced_gap(
+    gap: float,
+    horizon: int,
+    state: tuple[int, ...],
+    a_budget: float,
+    harmonic_constant: float,
+    large_gap_barrier_constant: float,
+    tolerance: float,
+) -> tuple[str, str]:
+    if gap <= tolerance:
+        return "EXACT_ZERO", "unrestricted and balanced Bellman values agree within tolerance"
+    if gap <= a_budget + tolerance:
+        return "ABSORBED_BY_A", f"gap {gap:.12g} is within A-budget {a_budget:.12g}"
+    if horizon > 0 and horizon * gap <= harmonic_constant + tolerance:
+        return "HARMONIC_O_LOG_T", f"h*gap {horizon * gap:.12g} is within harmonic constant {harmonic_constant:.12g}"
+    max_gap = max(_gap_vector(state), default=0)
+    if max_gap >= 2:
+        barrier_budget = large_gap_barrier_constant / float((max_gap + 1) ** 2)
+        if gap <= barrier_budget + tolerance:
+            return (
+                "LARGE_GAP_BARRIER",
+                f"gap {gap:.12g} is within large-gap proxy budget {barrier_budget:.12g}",
+            )
+    return "UNKNOWN", "gap exceeds exact, A, harmonic, and large-gap proxy budgets"
+
+
+def _unrestricted_vs_balanced_bellman_gap_manifest(
+    h_values: tuple[int, ...],
+    max_used: int,
+    include_low_gap_a: bool,
+    include_large_gap_proxy: bool,
+    a_budget: float,
+    harmonic_constant: float,
+    large_gap_barrier_constant: float,
+    support_tolerance: float,
+    tolerance: float,
+    sample_limit: int,
+) -> dict[str, object]:
+    if not h_values:
+        raise ValueError("h_values must be nonempty")
+    if any(horizon <= 0 for horizon in h_values):
+        raise ValueError("all h_values must be positive")
+    depth = max(h_values) + max_used
+    fixed_solution = _k5_balanced_mdp_fixed_chase_solution(depth)
+    states = _k5_balanced_chase_greedy_defect_states(max_used)
+    actions = tuple(all_actions(5))
+    large_gap_constants = _default_large_gap_influence_safe_b()
+    counts: dict[str, int] = defaultdict(int)
+    counts_by_regime: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    counts_by_packet: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    rows: list[dict[str, object]] = []
+    worst_rows: list[dict[str, object]] = []
+    unknown_rows: list[dict[str, object]] = []
+    max_gap = 0.0
+    max_h_scaled_gap = 0.0
+    checked_rows = 0
+
+    for horizon in h_values:
+        continuation = fixed_solution.values[horizon - 1]
+        for state in states:
+            rewards_by_action = {
+                action: _direct_route_gap_audit_successor_reward(
+                    state,
+                    action,
+                    continuation,
+                    include_low_gap_a=include_low_gap_a,
+                    include_large_gap_proxy=include_large_gap_proxy,
+                    large_gap_constants=large_gap_constants,
+                )
+                for action in actions
+            }
+            unrestricted = solve_adversary_dual(dict(rewards_by_action), 5)
+            if not unrestricted.success:
+                raise RuntimeError(f"unrestricted adversary LP failed at h={horizon} state={state}: {unrestricted.message}")
+            balanced_value, balanced_vertex = _balanced_operator_for_rewards(rewards_by_action)
+            gap = max(0.0, unrestricted.value - balanced_value)
+            row_class, reason = _classify_unrestricted_balanced_gap(
+                gap,
+                horizon,
+                state,
+                a_budget,
+                harmonic_constant,
+                large_gap_barrier_constant,
+                tolerance,
+            )
+            regime = _gap_audit_state_regime(state)
+            counts[row_class] += 1
+            counts_by_regime[regime][row_class] += 1
+            counts_by_packet[str(packet_type(state))][row_class] += 1
+            checked_rows += 1
+            max_gap = max(max_gap, gap)
+            max_h_scaled_gap = max(max_h_scaled_gap, horizon * gap)
+            support = tuple(
+                (action, weight)
+                for action, weight in unrestricted.weights_by_action
+                if weight > support_tolerance
+            )
+            top_rewards = sorted(
+                rewards_by_action.items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )[:5]
+            row = {
+                "h": horizon,
+                "state": list(state),
+                "packet_type": list(packet_type(state)),
+                "ordered_gaps": list(_gap_vector(state)),
+                "regime": regime,
+                "class": row_class,
+                "reason": reason,
+                "T_full_W": unrestricted.value,
+                "T_full_bal_W": balanced_value,
+                "gap": gap,
+                "h_scaled_gap": horizon * gap,
+                "unrestricted_expected_action": list(unrestricted.expected_action),
+                "unrestricted_max_expected_action": unrestricted.max_expected_action,
+                "unrestricted_support": [
+                    {"action": _bits_text(action), "weight": weight}
+                    for action, weight in support
+                ],
+                "balanced_best_class": _balanced_vertex_class_index(balanced_vertex),
+                "balanced_best_marginal": _fraction_text(balanced_vertex.marginal),
+                "balanced_best_support": _format_balanced_support(balanced_vertex.support),
+                "top_successor_rewards": [
+                    {"action": _bits_text(action), "reward": reward}
+                    for action, reward in top_rewards
+                ],
+            }
+            if row_class == "UNKNOWN":
+                unknown_rows.append(row)
+            if gap > tolerance or len(rows) < sample_limit:
+                rows.append(row)
+            worst_rows.append(row)
+
+    worst_rows = sorted(worst_rows, key=lambda item: float(item["gap"]), reverse=True)[:sample_limit]
+    return {
+        "format": "k5-unrestricted-vs-balanced-bellman-gap-manifest-v1",
+        "status": "OK" if not unknown_rows else "CHECK",
+        "h_values": list(h_values),
+        "max_used": max_used,
+        "depth": depth,
+        "potential_proxy": {
+            "base": "V_fixed_chase,t",
+            "low_gap_A": "A(x)=-L(x)/25-P(x)/200" if include_low_gap_a else "disabled",
+            "large_gap_barrier": (
+                "additive proxy sum_F B_F/(r+1)^2 over true large gaps"
+                if include_large_gap_proxy
+                else "disabled; chunk certificates are not a scalar W implementation"
+            ),
+            "note": (
+                "This is the closest implemented direct-route proxy in code; the merged large-gap "
+                "certificate controls influence rows, not a single exported scalar potential table."
+            ),
+        },
+        "operator_definitions": {
+            "unrestricted_mixed_action_bellman_operator": (
+                "T_full W(x) = sup_q { E_q[min(x+g)+W(can(x+g))] - max_i E_q[g_i] }, "
+                "where q ranges over probability distributions on {0,1}^5."
+            ),
+            "balanced_bellman_operator": (
+                "T_full^bal W(x) is the same objective restricted to balanced mixed actions; "
+                "the code maximizes over the enumerated k=5 balanced-action vertices."
+            ),
+            "unrestricted_lp": (
+                "variables q_g and z; maximize sum_g q_g R_g - z subject to "
+                "z >= sum_g q_g g_i for all i, sum_g q_g=1, q_g>=0"
+            ),
+        },
+        "budgets": {
+            "a_budget": a_budget,
+            "harmonic_constant": harmonic_constant,
+            "large_gap_barrier_constant": large_gap_barrier_constant,
+            "tolerance": tolerance,
+        },
+        "checked_rows": checked_rows,
+        "classification_counts": dict(sorted(counts.items())),
+        "classification_counts_by_regime": {
+            regime: dict(sorted(regime_counts.items()))
+            for regime, regime_counts in sorted(counts_by_regime.items())
+        },
+        "classification_counts_by_packet": {
+            packet: dict(sorted(packet_counts.items()))
+            for packet, packet_counts in sorted(counts_by_packet.items())
+        },
+        "max_gap": max_gap,
+        "max_h_scaled_gap": max_h_scaled_gap,
+        "unknown": len(unknown_rows),
+        "unknown_rows": unknown_rows,
+        "sample_rows": rows[:sample_limit],
+        "worst_rows": worst_rows,
+    }
+
+
+def print_k5_unrestricted_vs_balanced_bellman_gap_report(
+    h_values: tuple[int, ...] = (4, 8, 12),
+    max_used: int = 8,
+    include_low_gap_a: bool = True,
+    include_large_gap_proxy: bool = True,
+    a_budget: float = 0.0,
+    harmonic_constant: float = 1.0,
+    large_gap_barrier_constant: float = 1.0,
+    export_manifest: str | None = "reports/k5_unrestricted_vs_balanced_bellman_gap_manifest.json",
+    support_tolerance: float = 1e-9,
+    tolerance: float = 1e-10,
+    n: int = 30,
+) -> None:
+    manifest = _unrestricted_vs_balanced_bellman_gap_manifest(
+        h_values=h_values,
+        max_used=max_used,
+        include_low_gap_a=include_low_gap_a,
+        include_large_gap_proxy=include_large_gap_proxy,
+        a_budget=a_budget,
+        harmonic_constant=harmonic_constant,
+        large_gap_barrier_constant=large_gap_barrier_constant,
+        support_tolerance=support_tolerance,
+        tolerance=tolerance,
+        sample_limit=n,
+    )
+    if export_manifest:
+        parent = os.path.dirname(export_manifest)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(export_manifest, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+    unknown = int(manifest.get("unknown", 0) or 0)
+
+    print("k5 unrestricted-vs-balanced Bellman gap report")
+    print()
+    print(f"h_values: {h_values}")
+    print(f"max_used: {max_used}")
+    print(f"include_low_gap_A: {include_low_gap_a}")
+    print(f"include_large_gap_proxy: {include_large_gap_proxy}")
+    print(f"checked_rows: {manifest['checked_rows']}")  # type: ignore[index]
+    print(f"export_manifest: {export_manifest or '(not exported)'}")
+    print()
+
+    operators = manifest["operator_definitions"]  # type: ignore[index]
+    print("1. Bellman operators")
+    print(f"  unrestricted: {operators['unrestricted_mixed_action_bellman_operator']}")  # type: ignore[index]
+    print(f"  balanced: {operators['balanced_bellman_operator']}")  # type: ignore[index]
+    print(f"  unrestricted LP: {operators['unrestricted_lp']}")  # type: ignore[index]
+    print()
+
+    proxy = manifest["potential_proxy"]  # type: ignore[index]
+    print("2. potential used")
+    print(f"  base: {proxy['base']}")  # type: ignore[index]
+    print(f"  low-gap A: {proxy['low_gap_A']}")  # type: ignore[index]
+    print(f"  large-gap barrier: {proxy['large_gap_barrier']}")  # type: ignore[index]
+    print(f"  note: {proxy['note']}")  # type: ignore[index]
+    print()
+
+    print("3. classification counts")
+    counts = manifest["classification_counts"]  # type: ignore[index]
+    if isinstance(counts, dict):
+        for row_class, value in sorted(counts.items()):
+            print(f"  {row_class}: {value}")
+    print(f"  UNKNOWN: {unknown}")
+    print(f"  max gap T_full-T_bal: {manifest['max_gap']:.12g}")  # type: ignore[index]
+    print(f"  max h*gap: {manifest['max_h_scaled_gap']:.12g}")  # type: ignore[index]
+    print()
+
+    print("4. counts by regime")
+    by_regime = manifest["classification_counts_by_regime"]  # type: ignore[index]
+    if isinstance(by_regime, dict):
+        for regime, regime_counts in sorted(by_regime.items()):
+            pieces = " ".join(f"{row_class}={value}" for row_class, value in sorted(regime_counts.items()))
+            print(f"  {regime}: {pieces}")
+    print()
+
+    print("5. worst states and LP witnesses")
+    for row in manifest["worst_rows"][:n]:  # type: ignore[index]
+        support = ", ".join(
+            f"{item['action']}:{item['weight']:.4g}"
+            for item in row["unrestricted_support"][:8]
+        )
+        print(
+            f"  {row['class']} h={row['h']} state={row['state']}"
+            f" gaps={row['ordered_gaps']} gap={row['gap']:.12g}"
+            f" T_full={row['T_full_W']:.12g} T_bal={row['T_full_bal_W']:.12g}"
+        )
+        print(
+            f"    dual expected={row['unrestricted_expected_action']}"
+            f" z={row['unrestricted_max_expected_action']:.12g}"
+            f" support=[{support}]"
+        )
+        print(
+            f"    balanced={row['balanced_best_support']}"
+            f" reason={row['reason']}"
+        )
+    print()
+
+    print("6. theorem status")
+    if unknown == 0:
+        print(
+            "The audited rows satisfy T_full W <= T_full^bal W plus the displayed "
+            "controlled error classes. Thus the unrestricted-vs-balanced Bellman gap is "
+            "controlled on this tested quotient for the stated proxy potential."
+        )
+        print(r"\begin{theorem}[unrestricted-to-balanced Bellman gap audit]")
+        print(
+            r"On the audited \(k=5\) finite quotient, the proxy direct-route potential \(W\)"
+            r" satisfies \(T_{\rm full}W\le T_{\rm full}^{\rm bal}W+\varepsilon\),"
+            r" where every positive \(\varepsilon\) is classified by the finite"
+            r" \(A\)-budget, harmonic \(O(1/t)\) budget, or large-gap barrier budget."
+        )
+        print(r"\end{theorem}")
+    else:
+        print(
+            "The audited rows do not yet certify a controlled unrestricted-to-balanced bridge. "
+            "UNKNOWN rows exceed the exact, A, harmonic, and large-gap proxy budgets; see the manifest."
+        )
+    if unknown:
+        sys.stdout.flush()
+        raise SystemExit(f"unrestricted-vs-balanced Bellman gap audit has {unknown} UNKNOWN rows")
+
+
 def k5_large_gap_barrier_audit_report(
     h_values: tuple[int, ...] = (4, 8, 12, 15, 20),
     max_used: int = 12,
@@ -48509,6 +48897,40 @@ def _build_parser() -> argparse.ArgumentParser:
     k5_balanced_to_unrestricted_symmetrization_parser.add_argument("--tolerance", type=float, default=1e-10)
     k5_balanced_to_unrestricted_symmetrization_parser.add_argument("-n", type=int, default=20)
 
+    k5_unrestricted_vs_balanced_bellman_gap_parser = subparsers.add_parser(
+        "k5-unrestricted-vs-balanced-bellman-gap-report"
+    )
+    k5_unrestricted_vs_balanced_bellman_gap_parser.add_argument(
+        "--h-values",
+        default="4,8,12",
+        help="comma-separated horizons, e.g. 4,8,12",
+    )
+    k5_unrestricted_vs_balanced_bellman_gap_parser.add_argument("--max-used", type=int, default=8)
+    k5_unrestricted_vs_balanced_bellman_gap_parser.add_argument(
+        "--no-low-gap-a",
+        action="store_true",
+        help="disable the implemented low-gap correction A(x)=-L/25-P/200 in the proxy W",
+    )
+    k5_unrestricted_vs_balanced_bellman_gap_parser.add_argument(
+        "--no-large-gap-proxy",
+        action="store_true",
+        help="disable the additive large-gap B_F/(r+1)^2 proxy in W",
+    )
+    k5_unrestricted_vs_balanced_bellman_gap_parser.add_argument("--a-budget", type=float, default=0.0)
+    k5_unrestricted_vs_balanced_bellman_gap_parser.add_argument("--harmonic-constant", type=float, default=1.0)
+    k5_unrestricted_vs_balanced_bellman_gap_parser.add_argument(
+        "--large-gap-barrier-constant",
+        type=float,
+        default=1.0,
+    )
+    k5_unrestricted_vs_balanced_bellman_gap_parser.add_argument(
+        "--export-manifest",
+        default="reports/k5_unrestricted_vs_balanced_bellman_gap_manifest.json",
+    )
+    k5_unrestricted_vs_balanced_bellman_gap_parser.add_argument("--support-tolerance", type=float, default=1e-9)
+    k5_unrestricted_vs_balanced_bellman_gap_parser.add_argument("--tolerance", type=float, default=1e-10)
+    k5_unrestricted_vs_balanced_bellman_gap_parser.add_argument("-n", type=int, default=30)
+
     k5_scalar_potential_exchangeability_parser = subparsers.add_parser("k5-scalar-potential-exchangeability")
     k5_scalar_potential_exchangeability_parser.add_argument("--max-used", type=int, default=8)
     k5_scalar_potential_exchangeability_parser.add_argument(
@@ -50598,6 +51020,21 @@ def main() -> None:
             export_manifest=args.export_manifest,
             n=args.n,
             tolerance=args.tolerance,
+        )
+        return
+    if args.command == "k5-unrestricted-vs-balanced-bellman-gap-report":
+        print_k5_unrestricted_vs_balanced_bellman_gap_report(
+            h_values=_parse_T_values(args.h_values),
+            max_used=args.max_used,
+            include_low_gap_a=not args.no_low_gap_a,
+            include_large_gap_proxy=not args.no_large_gap_proxy,
+            a_budget=args.a_budget,
+            harmonic_constant=args.harmonic_constant,
+            large_gap_barrier_constant=args.large_gap_barrier_constant,
+            export_manifest=args.export_manifest,
+            support_tolerance=args.support_tolerance,
+            tolerance=args.tolerance,
+            n=args.n,
         )
         return
     if args.command == "k5-scalar-potential-exchangeability":
