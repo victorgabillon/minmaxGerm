@@ -28341,6 +28341,319 @@ def print_k5_unrestricted_vs_balanced_bellman_gap_report(
         raise SystemExit(f"unrestricted-vs-balanced Bellman gap audit has {unknown} UNKNOWN rows")
 
 
+def _manifest_h_values(payload: Mapping[str, object]) -> tuple[int, ...] | None:
+    raw = payload.get("h_values")
+    if not isinstance(raw, list):
+        return None
+    try:
+        return tuple(int(value) for value in raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _manifest_optional_int(payload: Mapping[str, object], key: str) -> int | None:
+    raw = payload.get(key)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _manifest_optional_float(payload: Mapping[str, object], key: str) -> float | None:
+    raw = payload.get(key)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _manifest_nested_dict(payload: Mapping[str, object], key: str) -> dict[str, object]:
+    raw = payload.get(key)
+    return raw if isinstance(raw, dict) else {}
+
+
+def _final_proof_component_status(
+    name: str,
+    path: str,
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        "name": name,
+        "path": path,
+        "format": payload.get("format"),
+        "status": payload.get("status"),
+    }
+
+
+def _final_certified_quotient_proof_manifest(
+    global_glue_manifest_path: str,
+    orbit_bridge_manifest_path: str,
+    unrestricted_gap_manifest_path: str,
+    global_harmonic_budget: float,
+    tolerance: float,
+) -> dict[str, object]:
+    global_glue = _load_json_manifest(
+        global_glue_manifest_path,
+        "k5-direct-route-global-glue-manifest-v1",
+    )
+    orbit_bridge = _load_json_manifest(
+        orbit_bridge_manifest_path,
+        "k5-orbit-to-fixed-chase-bridge-manifest-v1",
+    )
+    unrestricted_gap = _load_json_manifest(
+        unrestricted_gap_manifest_path,
+        "k5-unrestricted-vs-balanced-bellman-gap-manifest-v1",
+    )
+
+    failures: list[str] = []
+    warnings: list[str] = []
+    checks: dict[str, bool] = {}
+
+    global_checks = _manifest_nested_dict(global_glue, "checks")
+    row_classes = _manifest_nested_dict(global_glue, "row_classes")
+    global_ok = (
+        global_glue.get("status") == "OK"
+        and bool(global_checks.get("global_glue_ok"))
+        and int(row_classes.get("uncovered_interface_rows", 1)) == 0
+    )
+    checks["global_glue_ok"] = global_ok
+    if not global_ok:
+        failures.append("global glue manifest is not OK or has uncovered interface rows")
+
+    orbit_unknown = int(orbit_bridge.get("unknown", 0) or 0)
+    orbit_value_gap = _manifest_optional_float(orbit_bridge, "max_value_gap_orbit_minus_fixed_chase")
+    orbit_ok = orbit_bridge.get("status") == "OK" and orbit_unknown == 0 and (orbit_value_gap is not None and orbit_value_gap <= tolerance)
+    checks["orbit_to_fixed_chase_ok"] = orbit_ok
+    if not orbit_ok:
+        failures.append("orbit-to-fixed-Chase bridge is not exact/unknown-free")
+
+    unrestricted_unknown = int(unrestricted_gap.get("unknown", 0) or 0)
+    unrestricted_ok = unrestricted_gap.get("status") == "OK" and unrestricted_unknown == 0
+    checks["unrestricted_vs_balanced_unknown_free"] = unrestricted_ok
+    if not unrestricted_ok:
+        failures.append("unrestricted-vs-balanced Bellman gap manifest has UNKNOWN rows")
+
+    orbit_h = _manifest_h_values(orbit_bridge)
+    gap_h = _manifest_h_values(unrestricted_gap)
+    global_h = _manifest_h_values(global_glue)
+    horizon_ok = orbit_h is not None and gap_h is not None and orbit_h == gap_h
+    if global_h is not None:
+        horizon_ok = horizon_ok and global_h == orbit_h
+    else:
+        warnings.append("global glue manifest does not serialize h_values; checked bridge manifests against each other")
+    checks["same_horizons"] = horizon_ok
+    if not horizon_ok:
+        failures.append(f"horizon mismatch: global={global_h} orbit={orbit_h} unrestricted_gap={gap_h}")
+
+    orbit_max_used = _manifest_optional_int(orbit_bridge, "max_used")
+    gap_max_used = _manifest_optional_int(unrestricted_gap, "max_used")
+    global_max_used = _manifest_optional_int(global_glue, "max_used")
+    max_used_ok = orbit_max_used is not None and gap_max_used is not None and orbit_max_used == gap_max_used
+    if global_max_used is not None:
+        max_used_ok = max_used_ok and global_max_used == orbit_max_used
+    else:
+        warnings.append("global glue manifest does not serialize max_used; checked bridge manifests against each other")
+    checks["same_max_used"] = max_used_ok
+    if not max_used_ok:
+        failures.append(f"max_used mismatch: global={global_max_used} orbit={orbit_max_used} unrestricted_gap={gap_max_used}")
+
+    global_regions = _manifest_nested_dict(global_glue, "global_regions")
+    expected_region_split_ok = (
+        global_regions.get("LOW_GAP") == "max ordered gap <= 1"
+        and global_regions.get("TRUE_LARGE_GAP") == "some ordered gap >= 2"
+    )
+    orbit_regimes = set(_manifest_nested_dict(orbit_bridge, "classification_counts_by_regime"))
+    gap_regimes = set(_manifest_nested_dict(unrestricted_gap, "classification_counts_by_regime"))
+    region_labels_ok = orbit_regimes.issubset({"LOW_GAP", "TRUE_LARGE_GAP"}) and gap_regimes.issubset({"LOW_GAP", "TRUE_LARGE_GAP"})
+    region_split_ok = expected_region_split_ok and region_labels_ok
+    checks["same_region_split"] = region_split_ok
+    if not region_split_ok:
+        failures.append(
+            "region split mismatch: expected LOW_GAP/TRUE_LARGE_GAP with ordered-gap definitions"
+        )
+
+    potential_proxy = _manifest_nested_dict(unrestricted_gap, "potential_proxy")
+    correction_a_ok = potential_proxy.get("low_gap_A") == "A(x)=-L(x)/25-P(x)/200"
+    orbit_correction = str(orbit_bridge.get("correction_constant", ""))
+    correction_a_ok = correction_a_ok and orbit_correction in {"0", "0/1", "0.0"}
+    checks["correction_A_compatible"] = correction_a_ok
+    if not correction_a_ok:
+        failures.append("correction A / fixed-Chase correction constants are incompatible")
+    warnings.append("global glue manifest does not serialize correction A constants; checked unrestricted proxy and orbit correction constant")
+
+    components = _manifest_nested_dict(global_glue, "components")
+    large_gap_component = _manifest_nested_dict(components, "large_gap_merge")
+    large_gap_component_ok = large_gap_component.get("status") == "OK"
+    large_gap_proxy_text = str(potential_proxy.get("large_gap_barrier", ""))
+    large_gap_constants_ok = large_gap_component_ok and "B_F/(r+1)^2" in large_gap_proxy_text
+    checks["large_gap_constants_compatible"] = large_gap_constants_ok
+    if not large_gap_constants_ok:
+        failures.append("large-gap constants/proxy are not compatible with the large-gap component status")
+    warnings.append("exact large-gap B_F constants are not serialized in the final scalar proxy; compatibility is by component status and proxy family")
+
+    budgets = _manifest_nested_dict(unrestricted_gap, "budgets")
+    gap_harmonic_constant = float(budgets.get("harmonic_constant", 0.0) or 0.0)
+    max_h_scaled_gap = _manifest_optional_float(unrestricted_gap, "max_h_scaled_gap")
+    harmonic_budget_ok = (
+        gap_harmonic_constant <= global_harmonic_budget + tolerance
+        and max_h_scaled_gap is not None
+        and max_h_scaled_gap <= global_harmonic_budget + tolerance
+    )
+    checks["unrestricted_gaps_absorbed_by_global_harmonic_budget"] = harmonic_budget_ok
+    if not harmonic_budget_ok:
+        failures.append(
+            f"unrestricted positive gaps exceed global harmonic budget: max_h_scaled_gap={max_h_scaled_gap}, "
+            f"gap_harmonic_constant={gap_harmonic_constant}, global_budget={global_harmonic_budget}"
+        )
+
+    no_unknowns = global_ok and orbit_unknown == 0 and unrestricted_unknown == 0
+    checks["no_unknown_rows_in_any_component"] = no_unknowns
+    if not no_unknowns:
+        failures.append("at least one component has UNKNOWN or uncovered rows")
+
+    final_ok = not failures
+    return {
+        "format": "k5-final-certified-quotient-proof-manifest-v1",
+        "status": "OK" if final_ok else "CHECK",
+        "component_paths": {
+            "global_glue": global_glue_manifest_path,
+            "orbit_to_fixed_chase": orbit_bridge_manifest_path,
+            "unrestricted_vs_balanced_bellman_gap": unrestricted_gap_manifest_path,
+        },
+        "components": [
+            _final_proof_component_status("global_glue", global_glue_manifest_path, global_glue),
+            _final_proof_component_status("orbit_to_fixed_chase", orbit_bridge_manifest_path, orbit_bridge),
+            _final_proof_component_status("unrestricted_vs_balanced_bellman_gap", unrestricted_gap_manifest_path, unrestricted_gap),
+        ],
+        "compatibility": {
+            "h_values": list(orbit_h or gap_h or ()),
+            "max_used": orbit_max_used if orbit_max_used is not None else gap_max_used,
+            "global_harmonic_budget": global_harmonic_budget,
+            "max_h_scaled_unrestricted_gap": max_h_scaled_gap,
+            "orbit_max_value_gap": orbit_value_gap,
+            "unrestricted_gap_counts": unrestricted_gap.get("classification_counts", {}),
+            "global_row_classes": row_classes,
+            "orbit_counts": orbit_bridge.get("classification_counts", {}),
+        },
+        "checks": checks,
+        "failures": failures,
+        "warnings": warnings,
+        "remaining_caveats": [
+            "finite quotient / certificate packaging remains computer-assisted",
+            "v2 independent checker not yet supplied by this report",
+            "extension beyond tested horizons/cutoff is only as strong as the serialized coverage, monotone, and tail-reduction certificates",
+        ],
+        "theorem_statement": (
+            "On the certified finite quotient, the global balanced direct-route glue, "
+            "the exact orbit-to-fixed-Chase bridge, and the controlled unrestricted-vs-balanced "
+            "Bellman gap imply V_full(0,T) <= V_fixed_Chase(0,T) + O(log T)."
+        )
+        if final_ok
+        else (
+            "The final compatibility report found unresolved manifest incompatibilities; "
+            "the full-to-fixed-Chase quotient theorem is not emitted as certified."
+        ),
+    }
+
+
+def print_k5_final_certified_quotient_proof_report(
+    global_glue_manifest: str = "reports/k5_direct_route_global_glue_manifest.json",
+    orbit_bridge_manifest: str = "reports/k5_orbit_to_fixed_chase_bridge_manifest.json",
+    unrestricted_gap_manifest: str = "reports/k5_unrestricted_vs_balanced_bellman_gap_manifest.json",
+    export_manifest: str | None = "reports/k5_final_certified_quotient_proof_manifest.json",
+    global_harmonic_budget: float = 1.0,
+    tolerance: float = 1e-10,
+) -> None:
+    manifest = _final_certified_quotient_proof_manifest(
+        global_glue_manifest_path=global_glue_manifest,
+        orbit_bridge_manifest_path=orbit_bridge_manifest,
+        unrestricted_gap_manifest_path=unrestricted_gap_manifest,
+        global_harmonic_budget=global_harmonic_budget,
+        tolerance=tolerance,
+    )
+    if export_manifest:
+        parent = os.path.dirname(export_manifest)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(export_manifest, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+
+    print("k5 final certified quotient proof report")
+    print()
+    print(f"global_glue_manifest: {global_glue_manifest}")
+    print(f"orbit_bridge_manifest: {orbit_bridge_manifest}")
+    print(f"unrestricted_gap_manifest: {unrestricted_gap_manifest}")
+    print(f"export_manifest: {export_manifest or '(not exported)'}")
+    print()
+
+    print("1. component status")
+    for component in manifest["components"]:  # type: ignore[index]
+        print(
+            f"  {component['name']}: status={component['status']}"
+            f" format={component['format']} path={component['path']}"
+        )
+    print()
+
+    print("2. compatibility checks")
+    checks = manifest["checks"]  # type: ignore[index]
+    if isinstance(checks, dict):
+        for name, ok in sorted(checks.items()):
+            print(f"  {name}: {ok}")
+    compatibility = manifest["compatibility"]  # type: ignore[index]
+    print(f"  h_values: {compatibility['h_values']}")  # type: ignore[index]
+    print(f"  max_used: {compatibility['max_used']}")  # type: ignore[index]
+    print(f"  max h*unrestricted_gap: {compatibility['max_h_scaled_unrestricted_gap']}")  # type: ignore[index]
+    print(f"  global harmonic budget: {compatibility['global_harmonic_budget']}")  # type: ignore[index]
+    print()
+
+    print("3. component counts")
+    print(f"  global row classes: {compatibility['global_row_classes']}")  # type: ignore[index]
+    print(f"  orbit counts: {compatibility['orbit_counts']}")  # type: ignore[index]
+    print(f"  unrestricted gap counts: {compatibility['unrestricted_gap_counts']}")  # type: ignore[index]
+    print()
+
+    failures = manifest["failures"]  # type: ignore[index]
+    print("4. failures")
+    if failures:
+        for failure in failures:  # type: ignore[assignment]
+            print(f"  {failure}")
+    else:
+        print("  none")
+    print()
+
+    print("5. remaining caveats")
+    for caveat in manifest["remaining_caveats"]:  # type: ignore[index]
+        print(f"  - {caveat}")
+    warnings = manifest["warnings"]  # type: ignore[index]
+    if warnings:
+        print("  manifest warnings:")
+        for warning in warnings:  # type: ignore[assignment]
+            print(f"  - {warning}")
+    print()
+
+    print("6. theorem")
+    if manifest["status"] == "OK":  # type: ignore[index]
+        print(r"\begin{theorem}[final certified quotient bound]")
+        print(
+            r"On the certified \(k=5\) finite quotient, the direct-route balanced"
+            r" low-gap/large-gap supersolution, the exact orbit-to-fixed-Chase bridge,"
+            r" and the controlled unrestricted-vs-balanced Bellman gap imply"
+        )
+        print(r"\[")
+        print(r"V_{\rm full}(0,T)\le V_{\rm fixed\;Chase}(0,T)+O(\log T).")
+        print(r"\]")
+        print(r"\end{theorem}")
+    else:
+        print("  theorem not emitted as certified; resolve the failures above.")
+        sys.stdout.flush()
+        raise SystemExit("final certified quotient proof report has unresolved compatibility failures")
+
+
 def k5_large_gap_barrier_audit_report(
     h_values: tuple[int, ...] = (4, 8, 12, 15, 20),
     max_used: int = 12,
@@ -48931,6 +49244,28 @@ def _build_parser() -> argparse.ArgumentParser:
     k5_unrestricted_vs_balanced_bellman_gap_parser.add_argument("--tolerance", type=float, default=1e-10)
     k5_unrestricted_vs_balanced_bellman_gap_parser.add_argument("-n", type=int, default=30)
 
+    k5_final_certified_quotient_proof_parser = subparsers.add_parser(
+        "k5-final-certified-quotient-proof-report"
+    )
+    k5_final_certified_quotient_proof_parser.add_argument(
+        "--global-glue-manifest",
+        default="reports/k5_direct_route_global_glue_manifest.json",
+    )
+    k5_final_certified_quotient_proof_parser.add_argument(
+        "--orbit-bridge-manifest",
+        default="reports/k5_orbit_to_fixed_chase_bridge_manifest.json",
+    )
+    k5_final_certified_quotient_proof_parser.add_argument(
+        "--unrestricted-gap-manifest",
+        default="reports/k5_unrestricted_vs_balanced_bellman_gap_manifest.json",
+    )
+    k5_final_certified_quotient_proof_parser.add_argument(
+        "--export-manifest",
+        default="reports/k5_final_certified_quotient_proof_manifest.json",
+    )
+    k5_final_certified_quotient_proof_parser.add_argument("--global-harmonic-budget", type=float, default=1.0)
+    k5_final_certified_quotient_proof_parser.add_argument("--tolerance", type=float, default=1e-10)
+
     k5_scalar_potential_exchangeability_parser = subparsers.add_parser("k5-scalar-potential-exchangeability")
     k5_scalar_potential_exchangeability_parser.add_argument("--max-used", type=int, default=8)
     k5_scalar_potential_exchangeability_parser.add_argument(
@@ -51035,6 +51370,16 @@ def main() -> None:
             support_tolerance=args.support_tolerance,
             tolerance=args.tolerance,
             n=args.n,
+        )
+        return
+    if args.command == "k5-final-certified-quotient-proof-report":
+        print_k5_final_certified_quotient_proof_report(
+            global_glue_manifest=args.global_glue_manifest,
+            orbit_bridge_manifest=args.orbit_bridge_manifest,
+            unrestricted_gap_manifest=args.unrestricted_gap_manifest,
+            export_manifest=args.export_manifest,
+            global_harmonic_budget=args.global_harmonic_budget,
+            tolerance=args.tolerance,
         )
         return
     if args.command == "k5-scalar-potential-exchangeability":
